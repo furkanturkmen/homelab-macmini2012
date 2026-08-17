@@ -67,19 +67,21 @@ The Ubuntu installer starts. It's mostly menus. Press Enter to accept defaults u
 - **Language:** English
 - **Keyboard layout:** pick yours (US, UK, etc.)
 - **Type of install:** Ubuntu Server (not "minimized")
-- **Additional options / Search for third-party drivers:** ✅ **Yes** — pulls the proprietary Broadcom BCM4331 wifi firmware and HD 4000 quirks. Harmless if unused, useful later.
+- **Additional options / Search for third-party drivers:** ✅ **Yes** — this is a scan step, not a guaranteed install. On the Mac Mini 2012 the installer typically reports *"No applicable third-party drivers are available locally or online"* — that's expected and fine. The Broadcom BCM4331 wifi driver is *not* in this DB; it's a regular apt package (`bcmwl-kernel-source`) you can install later only if you want wifi. Since Ethernet is required anyway, most users never need it.
 - **Network:** should auto-detect your Ethernet and show a DHCP-assigned IP (e.g. `192.168.1.42/22`). **Change nothing** — just select Done. Do not try to set a static IP here; static assignment is done at the router in §1.6 (cleaner and survives OS reinstalls). **Write down the IP and MAC address shown now** — you'll need both for the router reservation later.
 - **Proxy:** leave blank
 - **Mirror:** leave default
-- **Storage:** pick "Use an entire disk" and select the Mac Mini's internal drive. **THIS ERASES THE MAC MINI COMPLETELY.**
+- **Storage:** pick "Use an entire disk" and select the Mac Mini's internal drive. Leave "Set up this disk as an LVM group" ✅ **checked**. Leave "Encrypt LVM with LUKS" ❌ **unchecked** (headless server = no monitor for boot password on every reboot). **THIS ERASES THE MAC MINI COMPLETELY.**
+- **⚠️ Fix the LVM root size before continuing.** Ubuntu's default LVM layout only allocates ~100 GB to the root volume (`ubuntu-lv`) even if your disk is 500 GB — leaving ~370 GB stranded in the volume group. Docker + Nextcloud + Jellyfin will fill 100 GB fast. Fix now: in the FILE SYSTEM SUMMARY, arrow down to `ubuntu-lv` under USED DEVICES → Enter → **Edit** → clear the Size field or set it to the max shown (e.g. `473G`) → **Save**. Confirm the `/` mount now shows the full disk size. Then **Done**.
 - **Confirm the destructive action:** yes, continue
 - **Profile setup:**
   - Your name: your name
   - Server's name (hostname): `homelab` (this is what shows up on your network)
   - Username: pick a short lowercase name, no spaces (e.g. `furkan`)
   - Password: strong, but memorable — you'll type it a lot
-- **SSH setup:** ✅ **Check "Install OpenSSH server"** — this is critical, you need it to log in remotely
-- **Featured server snaps:** don't check anything. Skip.
+- **Ubuntu Pro:** pick "Skip for now". Free for personal use (5 machines, 10-year security patches), but signup mid-install breaks flow. Attach later with `sudo pro attach <token>`.
+- **SSH setup:** ✅ **Check "Install OpenSSH server"** — this is critical, you need it to log in remotely. Also click **Import SSH identity → from GitHub** and enter your GitHub username — your public keys get added to `~/.ssh/authorized_keys` so you can SSH in without a password. Leave "Allow password authentication over SSH" ✅ checked as fallback until you've confirmed key login works. (Public keys are public — literally at `github.com/<username>.keys` — nothing sensitive.)
+- **Featured server snaps:** don't check anything. Skip. Especially do NOT check `nextcloud` — the snap would conflict with the docker-compose Nextcloud you'll run later.
 - Wait for install to finish (10-20 minutes)
 - When it says "Install complete!", pick **Reboot Now**
 - When it says "Please remove the installation medium," pull out the USB stick and press Enter
