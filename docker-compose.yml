@@ -13,7 +13,7 @@ services:
       - "53:53/udp"
       - "8080:80/tcp"
     environment:
-      TZ: "Europe/Istanbul"
+      TZ: "Europe/Amsterdam"
       WEBPASSWORD: "changeme"
       FTLCONF_LOCAL_IPV4: "192.168.1.10"
     volumes:
@@ -106,7 +106,7 @@ services:
       MYSQL_PASSWORD: "changeme-nc"
       REDIS_HOST: nextcloud-redis
       NEXTCLOUD_TRUSTED_DOMAINS: "192.168.1.10 cloud.yourdomain.com"
-      TZ: "Europe/Istanbul"
+      TZ: "Europe/Amsterdam"
     volumes:
       - ./nextcloud/html:/var/www/html
       - ./nextcloud/data:/var/www/html/data
@@ -126,4 +126,4 @@ services:
       - ./jellyfin/cache:/cache
       - /mnt/media:/media
     environment:
-      TZ: "Europe/Istanbul"
+      TZ: "Europe/Amsterdam"
