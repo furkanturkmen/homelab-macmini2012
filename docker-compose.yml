@@ -60,13 +60,13 @@ services:
 
   watchtower:
     container_name: watchtower
-    image: containrrr/watchtower:latest
+    image: nickfedor/watchtower:latest
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      WT_SCHEDULE: "0 0 4 * * *"
-      WT_CLEANUP: "true"
+      WATCHTOWER_SCHEDULE: "0 0 4 * * *"
+      WATCHTOWER_CLEANUP: "true"
 
   # =========================================================
   # FILES (Nextcloud + DB + Redis)
