@@ -24,7 +24,7 @@ This wipes the Mac Mini completely and installs Ubuntu Linux.
 On your Windows PC:
 
 - Go to https://ubuntu.com/download/server
-- Click the green **"Download Ubuntu Server 24.04 LTS"** button
+- Click the green **"Download Ubuntu Server 26.04 LTS"** button
 - You get a file ending in `.iso`. It's about 2.6 GB. Save it to your Downloads folder.
 
 An `.iso` file is a complete copy of an installer disc. You'll write it to the USB stick next.

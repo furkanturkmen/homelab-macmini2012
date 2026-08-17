@@ -38,7 +38,7 @@ Total setup time from a fresh computer: **about 2-3 hours**.
 
 ## The operating system
 
-**Ubuntu Server 24.04 LTS** — free, popular, well-documented Linux system with no desktop (no windows, no mouse). You control it entirely by typing commands, either from the Mac Mini's keyboard OR remotely from another computer over the network (called "SSH").
+**Ubuntu Server 26.04 LTS** — free, popular, well-documented Linux system with no desktop (no windows, no mouse). You control it entirely by typing commands, either from the Mac Mini's keyboard OR remotely from another computer over the network (called "SSH").
 
 The Mac Mini's original macOS gets completely erased. That is on purpose.
 
@@ -100,7 +100,7 @@ Each service listens on a "port" (like a channel number on the server). You open
 Quick summary if you already know what you're doing:
 
 ```bash
-# 1. Install Ubuntu Server 24.04 on your machine
+# 1. Install Ubuntu Server 26.04 on your machine
 # 2. Install Docker
 curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER   # log out and back in
