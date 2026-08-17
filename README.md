@@ -28,7 +28,7 @@ Total setup time from a fresh computer: **about 2-3 hours**.
 ## The hardware
 
 - **Mac Mini (Late 2012)** — that silver box Apple sold for a decade
-- **Intel Core i7** — 2 cores, 4 threads (feels like 4 slow cores)
+- **Intel Core i7** — 4 cores, 8 threads (Ivy Bridge quad-core, i7-3615QM or 3720QM)
 - **16 GB RAM** — the maximum this model supports, cannot upgrade
 - **HDD** (mechanical hard drive) — slow, planned upgrade to SSD later
 - **Ethernet cable required** — the built-in wifi doesn't play well with Linux
