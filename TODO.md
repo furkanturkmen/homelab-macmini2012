@@ -58,6 +58,8 @@ Your USB stick is now a bootable Ubuntu installer.
 
 If nothing happens or the Mac Mini boots into macOS anyway: unplug the USB, power off, try again with the Option key held from the exact moment you press power.
 
+> ⚠️ **Ethernet must be plugged in before boot.** The Mac Mini 2012's Broadcom BCM4331 wifi chip has no in-installer driver — booting without Ethernet triggers a kernel panic as the installer tries to init the network. Do not skip the cable.
+
 ### Step 1.4 — Install Ubuntu
 
 The Ubuntu installer starts. It's mostly menus. Press Enter to accept defaults unless noted:
@@ -65,6 +67,7 @@ The Ubuntu installer starts. It's mostly menus. Press Enter to accept defaults u
 - **Language:** English
 - **Keyboard layout:** pick yours (US, UK, etc.)
 - **Type of install:** Ubuntu Server (not "minimized")
+- **Additional options / Search for third-party drivers:** ✅ **Yes** — pulls the proprietary Broadcom BCM4331 wifi firmware and HD 4000 quirks. Harmless if unused, useful later.
 - **Network:** should auto-detect your Ethernet. If not, pick it and let it get an IP address from your router.
 - **Proxy:** leave blank
 - **Mirror:** leave default
