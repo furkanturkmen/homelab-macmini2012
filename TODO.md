@@ -228,7 +228,12 @@ nano ~/homelab/docker-compose.yml
 - `FTLCONF_LOCAL_IPV4: "192.168.1.10"` → your actual Mac Mini IP
 - `TZ: "Europe/Amsterdam"` (appears multiple times) → your timezone if different (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
 - `MARIADB_ROOT_PASSWORD` and `MARIADB_PASSWORD` → strong passwords for the database
-- `/mnt/media` → your actual movie/show folder path (or leave for now and add media later)
+- `/mnt/media:/media` → leave as-is unless your media is on a different path. The folder doesn't have to exist yet; Jellyfin will still start. When you're ready to add media, create typed subfolders on the host so Jellyfin can use the right metadata scraper per library:
+  ```
+  sudo mkdir -p /mnt/media/{movies,tv,music}
+  sudo chown -R $USER:$USER /mnt/media
+  ```
+  Then in Jellyfin's UI point separate libraries at `/media/movies` (TMDB scraper), `/media/tv` (TVDB), `/media/music` (MusicBrainz).
 - `NEXTCLOUD_TRUSTED_DOMAINS` → the IP you'll use to reach Nextcloud
 
 ### Step 4.3 — Handle the DNS conflict
@@ -265,7 +270,7 @@ Open a browser on your Windows PC (or phone on same wifi):
 - Pi-hole: `http://192.168.1.42:8080/admin`
 - Portainer: `http://192.168.1.42:9000` — create an admin account first visit
 - Nextcloud: `http://192.168.1.42:8081` — create admin, set up your first account
-- Jellyfin: `http://192.168.1.42:8096` — walk through wizard, point at `/media`
+- Jellyfin: `http://192.168.1.42:8096` — walk through wizard. Add libraries pointing at `/media/movies`, `/media/tv`, `/media/music` (create the host subfolders first as shown in §4.2).
 - Uptime Kuma: `http://192.168.1.42:3001` — create admin, add monitors for each service
 - Nginx Proxy Manager: `http://192.168.1.42:81` — default login `admin@example.com` / `changeme`, change immediately
 
