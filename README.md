@@ -27,11 +27,12 @@ Total setup time from a fresh computer: **about 2-3 hours**.
 
 ## The hardware
 
-- **Mac Mini (Late 2012)** — that silver box Apple sold for a decade
-- **Intel Core i7** — 4 cores, 8 threads (Ivy Bridge quad-core, i7-3615QM or 3720QM)
-- **16 GB RAM** — the maximum this model supports, cannot upgrade
-- **HDD** (mechanical hard drive) — slow, planned upgrade to SSD later
-- **Ethernet cable required** — the built-in wifi doesn't play well with Linux
+- **Mac mini (Late 2012)** — Apple model A1347, [identifier Macmini6,2](https://support.apple.com/en-us/111926)
+- **Intel Core i7-3615QM** — 2.3 GHz, 4 cores, 8 threads, 6 MB L3 cache (Ivy Bridge)
+- **Intel HD Graphics 4000** — integrated GPU, too weak for hardware video transcoding
+- **16 GB DDR3-1600 RAM** — maximum this model supports, cannot upgrade
+- **512 GB mechanical HDD** — slow, planned upgrade to a 2.5" SATA SSD
+- **Gigabit Ethernet** — always used (Broadcom wifi and Bluetooth skipped, driver support on Linux is poor)
 
 ---
 
