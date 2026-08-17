@@ -273,13 +273,9 @@ Check what's running:
 docker compose ps
 ```
 
-Every service should say "Up" or "running."
+Every service should say "Up" or "running." Note: "Up" only means the container is running — not that the app inside has finished booting. Two slow starters to expect:
 
-### Step 4.5 — Visit each service
-
-Open a browser on your Windows PC (or phone on same wifi):
-
-- Pi-hole: `http://192.168.1.42:8080/admin`
+- **Nextcloud** — first boot runs DB migrations + generates config; the web UI isn't reachable for 2-5 minutes after "Up." Don't refresh mid-install.- Pi-hole: `http://192.168.1.42:8080/admin`
 - Portainer: `http://192.168.1.42:9000` — create an admin account first visit
 - Nextcloud: `http://192.168.1.42:8081` — create admin, set up your first account
 - Jellyfin: `http://192.168.1.42:8096` — walk through wizard. Add libraries pointing at `/media/movies`, `/media/tv`, `/media/music` (create the host subfolders first as shown in §4.2).
