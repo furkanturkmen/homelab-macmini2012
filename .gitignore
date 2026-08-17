@@ -1,0 +1,15 @@
+# Runtime data / secrets
+pihole/
+portainer/
+nextcloud/
+jellyfin/
+uptime-kuma/
+npm/
+*.env
+.env
+*.secret
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
