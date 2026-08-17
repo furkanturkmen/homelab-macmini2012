@@ -62,7 +62,7 @@ Each service listens on a "port" (like a channel number on the server). You open
 - **Redis** — a fast in-memory cache that speeds up Nextcloud. Runs in the background.
 
 ### Media
-- **Jellyfin** — your own Netflix. Point it at your movie/show folder and stream to any device. Port `8096`.
+- **Jellyfin** — your own Netflix. Organize media into typed subfolders on the host (`/mnt/media/movies`, `/mnt/media/tv`, `/mnt/media/music`) and add each as a separate library in the Jellyfin UI so it uses the right metadata scraper (TMDB / TVDB / MusicBrainz). Port `8096`.
 
 ### Network
 - **Pi-hole** — network-wide ad blocker. Runs a DNS server that refuses to answer requests for ad domains. Port `8080` for its admin page.
