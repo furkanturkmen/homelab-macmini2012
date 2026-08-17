@@ -238,13 +238,25 @@ nano ~/homelab/docker-compose.yml
 
 ### Step 4.3 — Handle the DNS conflict
 
-Ubuntu runs its own tiny DNS service on port 53. Pi-hole needs port 53. Turn Ubuntu's off:
+Ubuntu runs its own tiny DNS service (`systemd-resolved`) on port 53. Pi-hole needs port 53. If you skip this step, Pi-hole crashes on start with "address already in use." Turn Ubuntu's off:
 
 ```
 sudo systemctl disable --now systemd-resolved
-sudo rm /etc/resolv.conf
+sudo systemctl disable --now systemd-resolved-varlink.socket systemd-resolved-monitor.socket
+sudo rm -f /etc/resolv.conf
 echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
 ```
+
+Why the second command: Ubuntu 26.04's `systemd-resolved` is socket-activated — two extra sockets will silently restart it the moment anything asks for DNS, undoing your work. You must disable those sockets too, or resolved rises from the dead.
+
+Verify port 53 is actually free and DNS still works from Ubuntu itself:
+
+```
+sudo ss -tulnp | grep ':53 '
+ping -c 2 google.com
+```
+
+Expected: `ss` prints **nothing** (port free). `ping` still gets replies (routed via Cloudflare `1.1.1.1` now). Only then move on.
 
 ### Step 4.4 — Start everything
 
