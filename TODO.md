@@ -230,10 +230,10 @@ nano ~/homelab/docker-compose.yml
 - `MARIADB_ROOT_PASSWORD` and `MARIADB_PASSWORD` → strong passwords for the database
 - `/mnt/media:/media` → leave as-is unless your media is on a different path. The folder doesn't have to exist yet; Jellyfin will still start. When you're ready to add media, create typed subfolders on the host so Jellyfin can use the right metadata scraper per library:
   ```
-  sudo mkdir -p /mnt/media/{movies,tv,music}
+  sudo mkdir -p /mnt/media/{movies,tv,music,anime}
   sudo chown -R $USER:$USER /mnt/media
   ```
-  Then in Jellyfin's UI point separate libraries at `/media/movies` (TMDB scraper), `/media/tv` (TVDB), `/media/music` (MusicBrainz).
+  Then in Jellyfin's UI point separate libraries at `/media/movies` (TMDB scraper), `/media/tv` (TVDB), `/media/music` (MusicBrainz), and optionally `/media/anime` (set content type to Shows, then enable AniDB provider in library settings — better anime metadata than TVDB).
 - `NEXTCLOUD_TRUSTED_DOMAINS` → the IP you'll use to reach Nextcloud
 
 ### Step 4.3 — Handle the DNS conflict
