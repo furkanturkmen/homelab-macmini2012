@@ -224,7 +224,7 @@ nano ~/homelab/docker-compose.yml
 
 **Find and change:**
 
-- `WEBPASSWORD: "changeme"` → strong password for Pi-hole admin
+- `FTLCONF_webserver_api_password: "changeme"` → strong password for Pi-hole admin. Note: **Pi-hole v6 renamed the env var** — the old `WEBPASSWORD` name is silently ignored and Pi-hole invents a random password shown only in `docker logs pihole`. If you copy old tutorials that still say `WEBPASSWORD`, you'll get locked out. Use `FTLCONF_webserver_api_password`.
 - `FTLCONF_LOCAL_IPV4: "192.168.1.10"` → your actual Mac Mini IP
 - `TZ: "Europe/Amsterdam"` (appears multiple times) → your timezone if different (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
 - `MARIADB_ROOT_PASSWORD` and `MARIADB_PASSWORD` → strong passwords for the database
