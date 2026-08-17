@@ -226,7 +226,7 @@ nano ~/homelab/docker-compose.yml
 
 - `WEBPASSWORD: "changeme"` → strong password for Pi-hole admin
 - `FTLCONF_LOCAL_IPV4: "192.168.1.10"` → your actual Mac Mini IP
-- `TZ: "Europe/Istanbul"` (appears multiple times) → your timezone if different (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+- `TZ: "Europe/Amsterdam"` (appears multiple times) → your timezone if different (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
 - `MARIADB_ROOT_PASSWORD` and `MARIADB_PASSWORD` → strong passwords for the database
 - `/mnt/media` → your actual movie/show folder path (or leave for now and add media later)
 - `NEXTCLOUD_TRUSTED_DOMAINS` → the IP you'll use to reach Nextcloud
