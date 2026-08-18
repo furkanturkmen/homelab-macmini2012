@@ -225,7 +225,8 @@ nano ~/homelab/docker-compose.yml
 **Find and change:**
 
 - `FTLCONF_webserver_api_password: "changeme"` → strong password for Pi-hole admin. Note: **Pi-hole v6 renamed the env var** — the old `WEBPASSWORD` name is silently ignored and Pi-hole invents a random password shown only in `docker logs pihole`. If you copy old tutorials that still say `WEBPASSWORD`, you'll get locked out. Use `FTLCONF_webserver_api_password`. Also — the env var only initializes the password on **first boot**; if you already ran the container once with the wrong name and want to change it, editing the compose + `docker compose up -d pihole` won't help (password lives in `./pihole/etc/pihole/pihole-FTL.db` from first init). Reset from inside the container instead: `docker exec -it pihole pihole setpassword`.
-- `FTLCONF_LOCAL_IPV4: "192.168.1.10"` → your actual Mac Mini IP
+- (`FTLCONF_LOCAL_IPV4` was removed from the compose file — Pi-hole v6 no longer recognises it and isn't needed for standard use.)
+- `FTLCONF_dns_listeningMode: "all"` — leave as-is. Required when Pi-hole runs in Docker with bridge networking. Without it Pi-hole rejects LAN queries with `dnsmasq: ignoring query from non-local network 192.168.x.x` because Docker's NAT makes clients look non-local. Not optional.
 - `TZ: "Europe/Amsterdam"` (appears multiple times) → your timezone if different (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
 - `MARIADB_ROOT_PASSWORD` and `MARIADB_PASSWORD` → strong passwords for the database
 - `/mnt/media:/media` → leave as-is unless your media is on a different path. The folder doesn't have to exist yet; Jellyfin will still start. When you're ready to add media, create typed subfolders on the host so Jellyfin can use the right metadata scraper per library:
