@@ -276,14 +276,60 @@ docker compose ps
 
 Every service should say "Up" or "running." Note: "Up" only means the container is running — not that the app inside has finished booting. Two slow starters to expect:
 
-- **Nextcloud** — first boot runs DB migrations + generates config; the web UI isn't reachable for 2-5 minutes after "Up." Don't refresh mid-install.- Pi-hole: `http://192.168.1.42:8080/admin`
-- Portainer: `http://192.168.1.42:9000` — create an admin account first visit
-- Nextcloud: `http://192.168.1.42:8081` — create admin, set up your first account
-- Jellyfin: `http://192.168.1.42:8096` — walk through wizard. Add libraries pointing at `/media/movies`, `/media/tv`, `/media/music` (create the host subfolders first as shown in §4.2).
-- Uptime Kuma: `http://192.168.1.42:3001` — create admin, add monitors for each service
-- Nginx Proxy Manager: `http://192.168.1.42:81` — default login `admin@example.com` / `changeme`, change immediately
+- **Nextcloud** — first boot runs DB migrations + generates config; the web UI isn't reachable for 2-5 minutes after "Up." Don't refresh mid-install.-run setup for each service
 
-Replace `192.168.1.42` with your Mac Mini's actual IP.
+Order matters here — do them in this sequence, not the order they appear in the compose file. Reasons noted per service. Substitute your actual Mac Mini IP for `192.168.1.42` below (or, if you added a Windows hosts-file entry, use `homelab`).
+
+**1. Portainer — `http://homelab:9000` (do first — has a 5-minute setup timeout)**
+
+Create admin username + password immediately. If you wait more than ~5 minutes after the container started, Portainer locks the setup for security. Recovery: `docker compose restart portainer`, grab the setup token from `docker logs portainer 2>&1 | grep setup_token`, paste it into the UI, then create the admin.
+
+**2. Nginx Proxy Manager — `http://homelab:81` (do second — default creds are a security hole)**
+
+Default login: `admin@example.com` / `changeme`. NPM forces a change on first login — set a real email (for Let's Encrypt certs later) and a strong password. The default account is updated in place, no cleanup needed.
+
+**3. Nextcloud — `http://homelab:8081` (first load takes 30-60s, install takes 2-5min more)**
+
+Create admin account. Nextcloud then runs DB migrations + generates config — **don't close the tab or refresh mid-install**, interruption corrupts state. When it lands on "Recommended apps", pick **Skip** (add Calendar/Contacts/Mail/etc. individually later; skip Nextcloud Office/Collabora entirely — it eats 400+ MB idle).
+
+If Nextcloud rejects some later request with HTTP 400 (`Access through untrusted domain`), it's the trusted-domains check. Env only seeds on first boot; add missing entries via CLI:
+```
+docker exec -u www-data nextcloud php occ config:system:set trusted_domains 1 --value=192.168.1.42:8081
+docker exec -u www-data nextcloud php occ config:system:set trusted_domains 2 --value=homelab
+docker exec -u www-data nextcloud php occ config:system:set trusted_domains 3 --value=homelab:8081
+```
+Include a `IP:PORT` variant — Uptime Kuma and other tools send `Host: 192.168.1.42:8081`, which doesn't match a bare `192.168.1.42` entry.
+
+**4. Pi-hole — `http://homelab:8080/admin`**
+
+Password = the `FTLCONF_webserver_api_password` you set in compose. If the compose env doesn't work (locked out with a random-looking password), see the Pi-hole notes in §4.2 — v6 changed the env var and password only inits on first boot, so a rename after first boot won't take. Reset with `docker exec -it pihole pihole setpassword`.
+
+**5. Uptime Kuma — `http://homelab:3001` (do after 1-4 so URLs + passwords are final)**
+
+Create admin. Then add HTTP monitors — use the **LAN IP** (`http://192.168.1.42:PORT`), not the `homelab` hostname. Uptime Kuma runs inside a container with no hosts-file entry; `homelab` won't resolve inside it. LAN IP also tests real reachability the way a browser does, not just container-to-container health.
+
+Suggested monitors:
+| Name | URL |
+|------|-----|
+| Pi-hole | `http://192.168.1.42:8080/admin` |
+| Portainer | `http://192.168.1.42:9000` |
+| Nextcloud | `http://192.168.1.42:8081` |
+| Jellyfin | `http://192.168.1.42:8096` |
+| NPM | `http://192.168.1.42:81` |
+
+0+ game server has no HTTP port to check. Skip Watchtower — no UI.
+
+**6. Jellyfin — `http://homelab:8096`**
+
+Wizard: language → admin account → **Add Media Library** for each type you want. Create the host folders first if you haven't:
+```
+sudo mkdir -p /mnt/media/{movies,tv,music,anime}
+sudo chown -R $USER:$USER /mnt/media
+```
+
+Add libraries inside Jellyfin pointing at `/media/movies` (content type Movies, TMDB scraper), `/media/tv` (Shows, TMDB), `/media/music` (Music, MusicBrainz + TheAudioDB), and `/media/anime` (Shows, Japan country). Then install anime plugins after the wizard: **Dashboard → Plugins → Catalog → Metadata → AniDB + AniList → Restart Jellyfin → edit Anime library → enable AniDB (top), AniList, TMDB fallback**.
+
+Also — leave **Hardware acceleration: None** in Dashboard → Playback → Transcoding. The HD 4000 is too weak for QSV; enabling it crashes ffmpeg. Play files in original format via clients that direct-play (Jellyfin Media Player, Infuse, Kodi). Avoid the browser player — it triggers transcoding.
 
 ### Step 4.6 — Point your router's DNS at Pi-hole
 
