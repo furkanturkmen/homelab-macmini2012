@@ -130,7 +130,6 @@ Open a web browser on any device on your home network and visit:
 | NPM admin | `http://<ip>:81` |
 | Nextcloud | `http://<ip>:8081` |
 | Jellyfin | `http://<ip>:8096` |
-
 To find the Mac Mini's IP, SSH in and run `ip a`. Look for the number that starts with `192.168.` or `10.`.
 
 ---
