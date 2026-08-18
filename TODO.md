@@ -408,6 +408,14 @@ Once the basics work, add these one at a time:
 - **Docker won't start something:** `docker logs <container_name>` shows why
 - **Can't SSH in:** check the Mac Mini's IP hasn't changed (check router)
 - **Service won't respond in browser:** check `docker compose ps` — is it running? Check firewall on the Mac Mini (`sudo ufw status`)
+- **Is the Mac Mini busy or idle?** The SSH login banner already shows load average, temperature, memory, and disk in one glance. For more detail:
+  - `htop` — live per-core CPU + per-process view (`q` to quit)
+  - `docker stats --no-stream` — CPU + RAM per container, identifies the hog
+  - `grep MHz /proc/cpuinfo` — current CPU frequency (Ivy Bridge idles ~1200 MHz, boosts to ~3300 MHz under load; stuck-high = permanently busy)
+  - `sensors` (after `sudo apt install lm-sensors && sudo sensors-detect --auto`) — per-core temperatures
+  - `uptime` — 1min / 5min / 15min load history
+  - Baseline for this stack at idle: ~25% RAM, load 0.3-0.6, CPU freq ~1200-1600 MHz, temp 55-62°C
+- **Does the Mac Mini need a monitor to stay on?** No. Ubuntu Server runs headless; no display attached is the intended state. It only powers off on unplug, `shutdown`, thermal cutoff, or kernel panic.
 - **General Linux help:** https://askubuntu.com
 - **General homelab help:** https://reddit.com/r/selfhosted or https://reddit.com/r/homelab
 - **Pi-hole:** https://discourse.pi-hole.net
