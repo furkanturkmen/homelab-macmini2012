@@ -68,7 +68,7 @@ The Ubuntu installer starts. It's mostly menus. Press Enter to accept defaults u
 - **Keyboard layout:** pick yours (US, UK, etc.)
 - **Type of install:** Ubuntu Server (not "minimized")
 - **Additional options / Search for third-party drivers:** ✅ **Yes** — this is a scan step, not a guaranteed install. On the Mac Mini 2012 the installer typically reports *"No applicable third-party drivers are available locally or online"* — that's expected and fine. The Broadcom BCM4331 wifi driver is *not* in this DB; it's a regular apt package (`bcmwl-kernel-source`) you can install later only if you want wifi. Since Ethernet is required anyway, most users never need it.
-- **Network:** should auto-detect your Ethernet and show a DHCP-assigned IP (e.g. `192.168.1.42/22`). **Change nothing** — just select Done. Do not try to set a static IP here; static assignment is done at the router in §1.6 (cleaner and survives OS reinstalls). **Write down the IP and MAC address shown now** — you'll need both for the router reservation later.
+- **Network:** should auto-detect your Ethernet and show a DHCP-assigned IP (e.g. `192.168.1.42/24`). **Change nothing** — just select Done. Do not try to set a static IP here; static assignment is done at the router in §1.6 (cleaner and survives OS reinstalls). **Write down the IP and MAC address shown now** — you'll need both for the router reservation later.
 - **Proxy:** leave blank
 - **Mirror:** leave default
 - **Storage:** pick "Use an entire disk" and select the Mac Mini's internal drive. Leave "Set up this disk as an LVM group" ✅ **checked**. Leave "Encrypt LVM with LUKS" ❌ **unchecked** (headless server = no monitor for boot password on every reboot). **THIS ERASES THE MAC MINI COMPLETELY.**
