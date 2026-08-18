@@ -130,6 +130,7 @@ Open a web browser on any device on your home network and visit:
 | NPM admin | `http://<ip>:81` |
 | Nextcloud | `http://<ip>:8081` |
 | Jellyfin | `http://<ip>:8096` |
+
 To find the Mac Mini's IP, SSH in and run `ip a`. Look for the number that starts with `192.168.` or `10.`.
 
 ---
@@ -152,8 +153,9 @@ Rough phases in [TODO.md](TODO.md):
 1. Install Ubuntu Server on Mac Mini
 2. Set up SSH access and install Docker
 3. Deploy the stack via docker-compose
-4. Set up Tailscale for remote access6. Upgrade HDD to SSD for a speed boost
-7. Later: add photo hosting (Immich), password manager (Vaultwarden), smart home (Home Assistant)
+4. Set up Tailscale for remote access
+5. Upgrade HDD to SSD for a speed boost
+6. Later: add photo hosting (Immich), password manager (Vaultwarden), smart home (Home Assistant)
 
 ---
 

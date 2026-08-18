@@ -276,7 +276,9 @@ docker compose ps
 
 Every service should say "Up" or "running." Note: "Up" only means the container is running — not that the app inside has finished booting. Two slow starters to expect:
 
-- **Nextcloud** — first boot runs DB migrations + generates config; the web UI isn't reachable for 2-5 minutes after "Up." Don't refresh mid-install.-run setup for each service
+- **Nextcloud** — first boot runs DB migrations + generates config; the web UI isn't reachable for 2-5 minutes after "Up." Don't refresh mid-install.
+
+### Step 4.5 — First-run setup for each service
 
 Order matters here — do them in this sequence, not the order they appear in the compose file. Reasons noted per service. Substitute your actual Mac Mini IP for `192.168.1.42` below (or, if you added a Windows hosts-file entry, use `homelab`).
 
@@ -317,7 +319,7 @@ Suggested monitors:
 | Jellyfin | `http://192.168.1.42:8096` |
 | NPM | `http://192.168.1.42:81` |
 
-0+ game server has no HTTP port to check. Skip Watchtower — no UI.
+Skip Watchtower — no UI.
 
 **6. Jellyfin — `http://homelab:8096`**
 
@@ -364,26 +366,24 @@ Now all your devices see each other on a private virtual network. Reach the Mac 
 
 ---
 
----
-
-## Phase 7 — Upgrade the HDD to an SSD
+## Phase 6 — Upgrade the HDD to an SSD
 
 The single biggest speed boost you can make. Do this once you're comfortable and have $50-80.
 
-### Step 7.1 — Buy the parts
+### Step 6.1 — Buy the parts
 
 - **2.5" SATA SSD**, 500 GB or 1 TB. Recommended: Crucial MX500 or Samsung 870 EVO.
 - **T6 Torx screwdriver** — for internal screws
 - **T8 Torx screwdriver** — for the drive bracket
 - **Plastic spudger or old credit card** — to pop the case open
 
-### Step 7.2 — Swap the drive
+### Step 6.2 — Swap the drive
 
 - Power off the Mac Mini
 - Follow the iFixit guide: search for "Mac Mini Late 2012 Hard Drive Replacement"
 - Takes about 30-45 minutes if you're careful
 
-### Step 7.3 — Reinstall Ubuntu on the SSD
+### Step 6.3 — Reinstall Ubuntu on the SSD
 
 - Repeat Phase 1 with the new SSD in place
 - Once Ubuntu is running, repeat Phases 2-4 (Docker + git clone + docker compose up)
