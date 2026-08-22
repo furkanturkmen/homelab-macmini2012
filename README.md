@@ -9,9 +9,9 @@ Turning an old Mac Mini into a personal server for files, media, and network too
 A homelab is just a computer at home that runs services for you instead of paying big companies for them. Think:
 
 - **Your own Google Drive** (Nextcloud) — files sync across devices, no monthly fee
-- **Your own Netflix** (Jellyfin) — stream movies and shows you own, on any device
+- **Your own Netflix** (Jellyfin + Radarr + Sonarr) — stream movies and shows, request new ones from a friendly UI
 - **Network-wide ad blocker** (Pi-hole) — blocks ads on every device on your wifi
-- **Remote access from anywhere** (Tailscale) — reach your server from your phone anywhere in the world
+- **Remote access from anywhere** (Netbird) — reach your server from your phone anywhere in the world, over an encrypted mesh VPN
 
 You get privacy, save money over time, and learn a ton.
 
@@ -19,7 +19,7 @@ You get privacy, save money over time, and learn a ton.
 
 ## What is this project?
 
-A single Mac Mini from 2012 running a stack of these services. Everything is defined in a file called `docker-compose.yml`. You install one thing (Docker), tell it "read this file," and it downloads and runs every service automatically.
+A single Mac Mini from 2012 running a stack of 16 services. Everything is defined in `docker-compose.yml`. You install one thing (Docker), tell it "read this file," and it downloads and runs every service automatically.
 
 Total setup time from a fresh computer: **about 2-3 hours**.
 
@@ -31,7 +31,7 @@ Total setup time from a fresh computer: **about 2-3 hours**.
 - **Intel Core i7-3615QM** — 2.3 GHz, 4 cores, 8 threads, 6 MB L3 cache (Ivy Bridge)
 - **Intel HD Graphics 4000** — integrated GPU, too weak for hardware video transcoding
 - **16 GB DDR3-1600 RAM** — maximum this model supports, cannot upgrade
-- **512 GB mechanical HDD** — slow, planned upgrade to a 2.5" SATA SSD
+- **Crucial MX100 512 GB SATA SSD** — swapped in from day one; huge speed jump over the stock 500 GB HDD
 - **Gigabit Ethernet** — always used (Broadcom wifi and Bluetooth skipped, driver support on Linux is poor)
 
 ---
@@ -54,25 +54,31 @@ Docker runs applications in isolated boxes called "containers." Each service (Je
 
 ## Services running on this homelab
 
-Each service listens on a "port" (like a channel number on the server). You open a web browser and go to `http://<mac-mini-ip>:<port>` to use it.
+Each service listens on a "port" (like a channel number on the server). You reach them either by IP + port (`http://<mac-mini-ip>:<port>`) or via a friendly hostname through Nginx Proxy Manager (`http://<service>.homelab.internal`) once DNS is set up.
+
+### Network
+- **Pi-hole** — network-wide ad blocker + local DNS. Serves records for `*.homelab.internal`. Port `8080` for admin.
+- **Nginx Proxy Manager (NPM)** — reverse proxy that turns `jellyfin.homelab.internal` into `http://jellyfin:8096` behind the scenes. Port `81` for admin.
+- **Netbird** — free WireGuard-based mesh VPN. Reach your homelab from anywhere. Installed on the host, not in Docker.
+
+### Admin
+- **Portainer** — web UI showing every container, click to start/stop/restart. Port `9000`.
+- **Uptime Kuma** — checks each service every minute, alerts you if one dies. Port `3001`.
+- **Watchtower** — quietly updates containers to their latest version every night at 4 AM. No web UI.
 
 ### Files
 - **Nextcloud** — your own Google Drive / iCloud replacement. Files, calendar, contacts, sync between phone and laptop. Port `8081`.
-- **MariaDB** — the database Nextcloud uses to store info. Runs in the background.
-- **Redis** — a fast in-memory cache that speeds up Nextcloud. Runs in the background.
+- **MariaDB** + **Redis** — database and cache Nextcloud depends on. No UI, run in the background.
 
-### Media
-- **Jellyfin** — your own Netflix. Organize media into typed subfolders on the host (`/mnt/media/movies`, `/mnt/media/tv`, `/mnt/media/music`) and add each as a separate library in the Jellyfin UI so it uses the right metadata scraper (TMDB / TVDB / MusicBrainz). Port `8096`.
-
-### Network
-- **Pi-hole** — network-wide ad blocker. Runs a DNS server that refuses to answer requests for ad domains. Port `8080` for its admin page.
-- **Nginx Proxy Manager (NPM)** — makes pretty URLs like `cloud.mydomain.com` instead of `192.168.1.10:8081`, and adds free HTTPS. Port `81` for its admin page.
-- **Tailscale** — free VPN that lets you reach the Mac Mini from anywhere (phone at cafe, laptop at work). Installed directly on Ubuntu, not in Docker.
-
-### Admin (tools to manage everything)
-- **Portainer** — web page showing every container, click to start/stop/restart. Port `9000`.
-- **Uptime Kuma** — checks each service every minute, alerts you if one dies. Port `3001`.
-- **Watchtower** — quietly updates containers to their latest version every night at 4 AM. No web page.
+### Media (Jellyfin + *arr pipeline)
+- **Jellyfin** — media server. Streams movies, TV, anime to any device. Port `8096`.
+- **Radarr** — movie library manager. Tracks what you have + fetches missing releases. Port `7878`.
+- **Sonarr** — same but for TV and anime. Port `8989`.
+- **Bazarr** — auto-downloads subtitles + syncs them to the audio track. Port `6767`.
+- **Prowlarr** — one place to configure indexers (torrent trackers, Usenet). Feeds Radarr + Sonarr. Port `9696`.
+- **qBittorrent** — download client that Radarr/Sonarr hand jobs to. Port `8083`.
+- **FlareSolverr** — proxy that solves Cloudflare challenges for indexers that require it. Port `8191`.
+- **Jellyseerr** — request UI for friends/family. They log in with their Jellyfin account, search for a title, click Request → Radarr/Sonarr grabs it → shows up in Jellyfin. Port `5055`.
 
 ---
 
@@ -80,16 +86,23 @@ Each service listens on a "port" (like a channel number on the server). You open
 
 | Category | Service | Port | What it does |
 |----------|---------|------|--------------|
+| Network | Pi-hole | 8080 | Ad blocker + local DNS |
+| Network | Nginx Proxy Manager | 80 / 443 / 81 | Reverse proxy + HTTPS |
+| Network | Netbird (on host) | — | Mesh VPN for remote access |
+| Admin | Portainer | 9000 / 9443 | Docker web UI |
+| Admin | Uptime Kuma | 3001 | Service monitor |
+| Admin | Watchtower | — | Auto-updater |
 | Files | Nextcloud | 8081 | Cloud drive |
 | Files | MariaDB | — | Nextcloud database |
 | Files | Redis | — | Nextcloud cache |
 | Media | Jellyfin | 8096 | Media streaming |
-| Network | Pi-hole | 8080 | Ad blocker + DNS |
-| Network | Nginx Proxy Manager | 80 / 443 / 81 | Reverse proxy + HTTPS |
-| Network | Tailscale (on host) | — | Remote access VPN |
-| Admin | Portainer | 9000 / 9443 | Docker web UI |
-| Admin | Uptime Kuma | 3001 | Service monitor |
-| Admin | Watchtower | — | Auto-updater |
+| Media | Radarr | 7878 | Movie manager |
+| Media | Sonarr | 8989 | TV / anime manager |
+| Media | Bazarr | 6767 | Subtitle auto-download |
+| Media | Prowlarr | 9696 | Indexer aggregator |
+| Media | qBittorrent | 8083 | Torrent client |
+| Media | FlareSolverr | 8191 | Cloudflare challenge solver |
+| Media | Jellyseerr | 5055 | Request UI |
 
 ---
 
@@ -109,12 +122,15 @@ sudo usermod -aG docker $USER   # log out and back in
 git clone https://github.com/furkanturkmen/homelab-macmini2012.git
 cd homelab-macmini2012
 
-# 4. Edit docker-compose.yml — change passwords, IP address, timezone
-nano docker-compose.yml
+# 4. Create your .env from the template — never commit real secrets
+cp .env.example .env
+nano .env    # set HOST_LAN_IP, timezone, passwords
 
 # 5. Start everything
 docker compose up -d
 ```
+
+The `.env` file is **gitignored** — your real passwords never leave your machine. The compose file only references `${VAR}` placeholders that get filled in from `.env` at runtime.
 
 ---
 
@@ -122,7 +138,7 @@ docker compose up -d
 
 Open a web browser on any device on your home network and visit:
 
-| Service | URL (replace `<ip>` with Mac Mini IP) |
+| Service | URL (replace `<ip>` with your Mac Mini IP) |
 |---------|---------|
 | Pi-hole admin | `http://<ip>:8080/admin` |
 | Portainer | `http://<ip>:9000` |
@@ -130,8 +146,16 @@ Open a web browser on any device on your home network and visit:
 | NPM admin | `http://<ip>:81` |
 | Nextcloud | `http://<ip>:8081` |
 | Jellyfin | `http://<ip>:8096` |
+| Radarr | `http://<ip>:7878` |
+| Sonarr | `http://<ip>:8989` |
+| Bazarr | `http://<ip>:6767` |
+| Prowlarr | `http://<ip>:9696` |
+| qBittorrent | `http://<ip>:8083` |
+| Jellyseerr | `http://<ip>:5055` |
 
-To find the Mac Mini's IP, SSH in and run `ip a`. Look for the number that starts with `192.168.` or `10.`.
+Find the Mac Mini's IP by SSH'ing in and running `ip -4 addr show`. Look for the number that starts with `192.168.` or `10.`.
+
+Once NPM is set up you can also reach each service by hostname: `http://jellyfin.homelab.internal`, `http://nextcloud.homelab.internal`, etc.
 
 ---
 
@@ -139,9 +163,9 @@ To find the Mac Mini's IP, SSH in and run `ip a`. Look for the number that start
 
 - **The Mac Mini becomes headless** — no monitor, no keyboard once set up. You control it from your laptop via SSH.
 - **Broadcom wifi and Bluetooth don't work well on Linux** for this model. Use Ethernet only.
-- **The Intel HD 4000 GPU is too weak** to convert video formats on-the-fly for Jellyfin. Play files in their original format only.
-- **16 GB RAM is the ceiling.** Don't try to run every service at maximum load at once — pick a few main ones.
-- **The HDD is slow.** SSD upgrade planned — big performance jump when it happens.
+- **The Intel HD 4000 GPU is too weak** to convert video formats on-the-fly for Jellyfin. Play files in their original format via a native player (Jellyfin Media Player, Infuse, Kodi) — avoid the browser player for heavy files.
+- **16 GB RAM is the ceiling.** With all 16 services idle it sits around 3 GB used — plenty of headroom for normal use.
+- **HTTPS on `*.homelab.internal` won't work** — it's a private TLD, Let's Encrypt can't issue a certificate. Use plain HTTP internally, and switch to a real domain + Cloudflare Tunnel if you want to expose anything publicly.
 - **Runtime data is excluded** from this repo via `.gitignore`. Each service writes its own data locally on your machine (photos in Nextcloud, media library in Jellyfin, etc.). Only the recipe files are tracked here.
 
 ---
@@ -153,9 +177,10 @@ Rough phases in [TODO.md](TODO.md):
 1. Install Ubuntu Server on Mac Mini
 2. Set up SSH access and install Docker
 3. Deploy the stack via docker-compose
-4. Set up Tailscale for remote access
-5. Upgrade HDD to SSD for a speed boost
-6. Later: add photo hosting (Immich), password manager (Vaultwarden), smart home (Home Assistant)
+4. Run first-run wizards for each service (Portainer, NPM, Nextcloud, Jellyfin, *arr, Jellyseerr)
+5. Point your router's DNS at Pi-hole for LAN-wide ad blocking
+6. Install Netbird for remote access
+7. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
 
