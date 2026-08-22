@@ -9,12 +9,12 @@ services:
     image: pihole/pihole:latest
     restart: unless-stopped
     ports:
-      - "53:53/tcp"
-      - "53:53/udp"
+      - "${HOST_LAN_IP}:53:53/tcp"
+      - "${HOST_LAN_IP}:53:53/udp"
       - "8080:80/tcp"
     environment:
-      TZ: "Europe/Amsterdam"
-      FTLCONF_webserver_api_password: "changeme"
+      TZ: "${TZ}"
+      FTLCONF_webserver_api_password: "${PIHOLE_PASSWORD}"
       FTLCONF_dns_listeningMode: "all"
     volumes:
       - ./pihole/etc:/etc/pihole
@@ -78,10 +78,10 @@ services:
     restart: unless-stopped
     command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
     environment:
-      MARIADB_ROOT_PASSWORD: "changeme-root"
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
       MARIADB_DATABASE: "nextcloud"
       MARIADB_USER: "nextcloud"
-      MARIADB_PASSWORD: "changeme-nc"
+      MARIADB_PASSWORD: "${MARIADB_PASSWORD}"
     volumes:
       - ./nextcloud/db:/var/lib/mysql
 
@@ -103,16 +103,16 @@ services:
       MYSQL_HOST: nextcloud-db
       MYSQL_DATABASE: nextcloud
       MYSQL_USER: nextcloud
-      MYSQL_PASSWORD: "changeme-nc"
+      MYSQL_PASSWORD: "${MARIADB_PASSWORD}"
       REDIS_HOST: nextcloud-redis
-      NEXTCLOUD_TRUSTED_DOMAINS: "192.168.1.10 cloud.yourdomain.com"
-      TZ: "Europe/Amsterdam"
+      NEXTCLOUD_TRUSTED_DOMAINS: "${HOST_LAN_IP}"
+      TZ: "${TZ}"
     volumes:
       - ./nextcloud/html:/var/www/html
       - ./nextcloud/data:/var/www/html/data
 
   # =========================================================
-  # MEDIA
+  # MEDIA — Jellyfin + *arr pipeline
   # =========================================================
 
   jellyfin:
@@ -126,4 +126,98 @@ services:
       - ./jellyfin/cache:/cache
       - /mnt/media:/media
     environment:
-      TZ: "Europe/Amsterdam"
+      TZ: "${TZ}"
+
+  radarr:
+    container_name: radarr
+    image: lscr.io/linuxserver/radarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - ./radarr/config:/config
+      - /mnt/media:/media
+    ports:
+      - "7878:7878"
+
+  sonarr:
+    container_name: sonarr
+    image: lscr.io/linuxserver/sonarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - ./sonarr/config:/config
+      - /mnt/media:/media
+    ports:
+      - "8989:8989"
+
+  bazarr:
+    container_name: bazarr
+    image: lscr.io/linuxserver/bazarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - ./bazarr/config:/config
+      - /mnt/media:/media
+    ports:
+      - "6767:6767"
+
+  prowlarr:
+    container_name: prowlarr
+    image: linuxserver/prowlarr:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - ./prowlarr/config:/config
+    ports:
+      - "9696:9696"
+
+  qbittorrent:
+    container_name: qbittorrent
+    image: linuxserver/qbittorrent:latest
+    restart: unless-stopped
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+      WEBUI_PORT: 8083
+    volumes:
+      - ./qbittorrent/config:/config
+      - /mnt/media:/media
+    ports:
+      - "8083:8083"
+      - "6881:6881"
+      - "6881:6881/udp"
+
+  flaresolverr:
+    container_name: flaresolverr
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ}"
+    ports:
+      - "8191:8191"
+
+  jellyseerr:
+    container_name: jellyseerr
+    image: fallenbagel/jellyseerr:latest
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+      TZ: "${TZ}"
+      PORT: 5055
+    volumes:
+      - ./jellyseerr/config:/app/config
+    ports:
+      - "5055:5055"

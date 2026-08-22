@@ -212,30 +212,36 @@ scp C:\Users\Furkan\homelab\docker-compose.yml yourusername@192.168.1.42:~/homel
 
 You'll need to create `~/homelab` on the Mac Mini first (`mkdir ~/homelab`).
 
-### Step 4.2 — Edit the recipe
+### Step 4.2 — Create your `.env` file
 
-Still on the Mac Mini, open the file:
+The compose file has zero real secrets in it — every password and per-host value is a `${VAR}` placeholder that gets filled in from a separate file called `.env`. That file is **gitignored** so your secrets never leave the Mac Mini.
+
+Copy the template and edit it:
 
 ```
-nano ~/homelab/docker-compose.yml
+cp .env.example .env
+nano .env
 ```
 
 `nano` is a simple text editor. Arrow keys to move, Ctrl+O to save, Ctrl+X to exit.
 
-**Find and change:**
+**Set each variable:**
 
-- `FTLCONF_webserver_api_password: "changeme"` → strong password for Pi-hole admin. Note: **Pi-hole v6 renamed the env var** — the old `WEBPASSWORD` name is silently ignored and Pi-hole invents a random password shown only in `docker logs pihole`. If you copy old tutorials that still say `WEBPASSWORD`, you'll get locked out. Use `FTLCONF_webserver_api_password`. Also — the env var only initializes the password on **first boot**; if you already ran the container once with the wrong name and want to change it, editing the compose + `docker compose up -d pihole` won't help (password lives in `./pihole/etc/pihole/pihole-FTL.db` from first init). Reset from inside the container instead: `docker exec -it pihole pihole setpassword`.
-- (`FTLCONF_LOCAL_IPV4` was removed from the compose file — Pi-hole v6 no longer recognises it and isn't needed for standard use.)
-- `FTLCONF_dns_listeningMode: "all"` — leave as-is. Required when Pi-hole runs in Docker with bridge networking. Without it Pi-hole rejects LAN queries with `dnsmasq: ignoring query from non-local network 192.168.x.x` because Docker's NAT makes clients look non-local. Not optional.
-- `TZ: "Europe/Amsterdam"` (appears multiple times) → your timezone if different (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
-- `MARIADB_ROOT_PASSWORD` and `MARIADB_PASSWORD` → strong passwords for the database
-- `/mnt/media:/media` → leave as-is unless your media is on a different path. The folder doesn't have to exist yet; Jellyfin will still start. When you're ready to add media, create typed subfolders on the host so Jellyfin can use the right metadata scraper per library:
+- `HOST_LAN_IP=192.168.1.42` → the Mac Mini's LAN IP from §1.5. Used by Pi-hole (port binding) and Nextcloud (trusted domain).
+- `TZ=Europe/Amsterdam` → your timezone if different (see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+- `PUID=1000` and `PGID=1000` → run `id -u` and `id -g` on the Mac Mini to check yours (usually 1000 for the first user). The *arr containers use these to write files as your user.
+- `PIHOLE_PASSWORD=` → strong password for Pi-hole admin. Note: **Pi-hole v6 renamed the env var** — the old `WEBPASSWORD` name is silently ignored and Pi-hole invents a random password shown only in `docker logs pihole`. If you copy old tutorials that still say `WEBPASSWORD`, you'll get locked out. The compose here uses the correct `FTLCONF_webserver_api_password`. Also — the env var only initializes the password on **first boot**; if you already ran the container once and want to change it, editing `.env` + `docker compose up -d pihole` won't help (password lives in `./pihole/etc/pihole/pihole-FTL.db` from first init). Reset from inside the container instead: `docker exec -it pihole pihole setpassword`.
+- `MARIADB_ROOT_PASSWORD=` and `MARIADB_PASSWORD=` → strong passwords for the database. `MARIADB_PASSWORD` is referenced twice (in `nextcloud-db` and `nextcloud`) so they always match.
+
+**A note on media folders and DNS listening mode (both stay in `docker-compose.yml`, no editing needed):**
+
+- `FTLCONF_dns_listeningMode: "all"` on Pi-hole — required when Pi-hole runs in Docker with bridge networking. Without it Pi-hole rejects LAN queries with `dnsmasq: ignoring query from non-local network 192.168.x.x` because Docker's NAT makes clients look non-local.
+- `/mnt/media:/media` mounted into Jellyfin + all *arr containers — leave as-is. The folder doesn't have to exist yet; Jellyfin will still start. When you're ready to add media, create typed subfolders on the host so Jellyfin can use the right metadata scraper per library:
   ```
   sudo mkdir -p /mnt/media/{movies,tv,music,anime}
   sudo chown -R $USER:$USER /mnt/media
   ```
   Then in Jellyfin's UI point separate libraries at `/media/movies` (TMDB scraper), `/media/tv` (TVDB), `/media/music` (MusicBrainz), and optionally `/media/anime` (set content type to Shows, then enable AniDB provider in library settings — better anime metadata than TVDB).
-- `NEXTCLOUD_TRUSTED_DOMAINS` → the IP you'll use to reach Nextcloud
 
 ### Step 4.3 — Handle the DNS conflict
 
@@ -331,7 +337,63 @@ sudo chown -R $USER:$USER /mnt/media
 
 Add libraries inside Jellyfin pointing at `/media/movies` (content type Movies, TMDB scraper), `/media/tv` (Shows, TMDB), `/media/music` (Music, MusicBrainz + TheAudioDB), and `/media/anime` (Shows, Japan country). Then install anime plugins after the wizard: **Dashboard → Plugins → Catalog → Metadata → AniDB + AniList → Restart Jellyfin → edit Anime library → enable AniDB (top), AniList, TMDB fallback**.
 
-Also — leave **Hardware acceleration: None** in Dashboard → Playback → Transcoding. The HD 4000 is too weak for QSV; enabling it crashes ffmpeg. Play files in original format via clients that direct-play (Jellyfin Media Player, Infuse, Kodi). Avoid the browser player — it triggers transcoding.
+Also — leave **Hardware acceleration: None** in Dashboard → Playback → Transcoding. The HD 4000 is too weak for QSV; enabling it crashes ffmpeg. Play files in original format via clients that direct-play (Jellyfin Media Player, Infuse, Kodi, Swiftfin). Avoid the browser player — it triggers transcoding.
+
+**7. Prowlarr — `http://homelab:9696` (do BEFORE Radarr/Sonarr — feeds them)**
+
+Prowlarr is the one place you configure indexers (torrent trackers, Usenet). It then syncs them to Radarr + Sonarr automatically, so you don't add the same indexer 3 times.
+
+Set an admin password (Settings → General → Authentication = Forms, save, then Basic auth prompts). Add a couple of indexers (Indexers → Add → search e.g. `1337x`, `rarbg-mirror`, `nyaa` for anime). If an indexer is behind Cloudflare, tick **FlareSolverr** and set the URL to `http://flaresolverr:8191`. We'll wire Radarr + Sonarr into Prowlarr in their steps.
+
+**8. qBittorrent — `http://homelab:8083`**
+
+Default login: `admin` / `adminadmin`. **Change it immediately** (Tools → Options → Web UI). Then set:
+
+- Downloads → Default Save Path: `/media/downloads` (create it in advance: `mkdir -p /mnt/media/downloads`)
+- Connection → Listening port: `6881` (already mapped in compose)
+- BitTorrent → Enable DHT + PeX + LSD
+
+**9. Radarr — `http://homelab:7878` (movies)**
+
+- Settings → General → Authentication = Forms, set admin password
+- Settings → Media Management → Movie Naming: **Rename Movies ON**. Movie Folder Format: `{Movie CleanTitle} ({Release Year})` — plain parens, **no curly braces around the parens** (subtle default pitfall that produces folder names like `Movie ({2024})`)
+- Settings → Media Management → Add Root Folder → `/media/movies`
+- Settings → Download Clients → Add → qBittorrent → Host: `qbittorrent`, Port: `8083`, credentials from above, Category: `radarr`
+- Settings → Indexers → **Sync from Prowlarr instead**: go to Prowlarr → Settings → Apps → Add → Radarr → Prowlarr Server: `http://prowlarr:9696`, Radarr Server: `http://radarr:7878`, API key from Radarr → Settings → General → API Key. Save. Prowlarr pushes indexers to Radarr automatically.
+
+**10. Sonarr — `http://homelab:8989` (TV + anime)**
+
+Same pattern as Radarr:
+
+- Auth: Forms + password
+- Media Management → Rename Episodes ON, Episode Naming defaults are fine
+- Add Root Folder `/media/tv` AND `/media/anime` (two separate roots)
+- Download Client: qBittorrent (Category: `sonarr`)
+- Wire into Prowlarr: Prowlarr → Settings → Apps → Add → Sonarr → API key from Sonarr → Settings → General → API Key
+
+For anime: create a separate Quality Profile named "Anime" that prefers 1080p x264/x265; when adding an anime series, pick that profile + root folder `/media/anime`. Sonarr handles episode-per-file OR absolute-numbered (`SxxEyy` vs `Exxxx`) both.
+
+**11. Bazarr — `http://homelab:6767` (subtitles)**
+
+Settings → General → Authentication = Forms, set password. Then wire Bazarr to your library and providers:
+
+- Settings → Sonarr → Address `sonarr`, Port `8989`, API key from Sonarr → Test → Save
+- Settings → Radarr → Address `radarr`, Port `7878`, API key from Radarr → Test → Save
+- Settings → Providers → add OpenSubtitles.com (free account) + Subscene fallback; set your preferred languages under Settings → Languages
+- Settings → Subtitles → enable **Use audio track as reference for sync** (uses ffsubsync to auto-time subs to the file's audio — huge quality win)
+
+Bazarr now scans every movie/episode Radarr + Sonarr know about, fetches missing subs, and syncs them.
+
+**12. Jellyseerr — `http://homelab:5055` (request UI)**
+
+Wizard walks you through:
+
+- **Media server**: pick **Jellyfin**
+- **Jellyfin config**: URL `http://jellyfin:8096`, email + password of your Jellyfin admin account. Click **Sync Libraries** and tick the libraries you want requestable.
+- **Radarr**: Hostname `radarr`, Port `7878`, API key from Radarr, Quality Profile `HD-1080p`, Root Folder `/media/movies`, Minimum Availability `Released`.
+- **Sonarr**: Hostname `sonarr`, Port `8989`, API key from Sonarr, Quality Profile + Root Folders for both `/media/tv` and (optionally) a separate anime root at `/media/anime`.
+
+Jellyseerr auto-syncs your Jellyfin user list — friends log in with the same Jellyfin credentials. Settings → Users → default permissions controls who can request without approval.
 
 ### Step 4.6 — Point your router's DNS at Pi-hole
 
@@ -344,25 +406,50 @@ Now every device on your wifi uses Pi-hole automatically. Ads gone.
 
 ---
 
-## Phase 5 — Remote access with Tailscale
+## Phase 5 — Remote access with Netbird
 
-Tailscale lets you reach the Mac Mini from your phone at a cafe, laptop at work, etc. Without opening ports on your router.
+Netbird is a free WireGuard-based mesh VPN. Lets you reach the Mac Mini from your phone at a cafe, laptop at work, etc. — without opening ports on your router.
 
-### Step 5.1 — Install Tailscale on the Mac Mini
+> **Why Netbird instead of Tailscale?** Both work. Tailscale was tried first here and dropped because of an iOS 26 bug where split-DNS wasn't applied on cellular. Netbird's split-DNS worked immediately on all platforms. Both are excellent — pick either, this guide covers Netbird.
+
+### Step 5.1 — Install Netbird on the Mac Mini
 
 ```
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
+curl -fsSL https://pkgs.netbird.io/install.sh | sh
+sudo netbird up
 ```
 
-It prints a URL. Open it on your phone/laptop, sign in (free personal account with Google/Microsoft/GitHub).
+It prints a URL. Open it in a browser, sign in (free personal account with Google/GitHub/Microsoft). The Mac Mini joins your Netbird "network" as a peer.
 
-### Step 5.2 — Install Tailscale on your other devices
+### Step 5.2 — Install Netbird on your other devices
 
-- Phone: install the Tailscale app from App Store / Play Store, sign in same account
-- Laptop: download from https://tailscale.com/download
+- Phone: install the Netbird app from App Store / Play Store, sign in with the same account
+- Laptop: download from https://netbird.io/download
 
-Now all your devices see each other on a private virtual network. Reach the Mac Mini using its Tailscale IP (visible in the app).
+Now all your devices see each other. Reach the Mac Mini using its Netbird IP (visible in the app) — e.g. `http://100.71.232.136:8096` for Jellyfin.
+
+### Step 5.3 — Add a Network Route so peers can reach LAN IPs
+
+By default Netbird only lets peers reach each other by their Netbird IPs. To reach `192.168.1.42:8096` (or any other LAN device) from your phone off-LAN:
+
+- Netbird admin panel (https://app.netbird.io) → **Networks** → **Add Network** → Name: `homelab-lan`
+- **Add Resource** → **Subnet** → CIDR: `192.168.1.0/22` (or whatever covers your LAN — check `ip -4 addr show` on the Mac Mini)
+- Assign the routing peer: **homelab** (the Mac Mini), toggle **Masquerade** ON
+- Save
+
+Now phones on 4G can reach `192.168.1.42:PORT` as if they were on your wifi.
+
+### Step 5.4 — Add split-DNS for `*.homelab.internal`
+
+If you set up Pi-hole with local hostnames like `jellyfin.homelab.internal`:
+
+- Netbird admin → **DNS** → **Add Nameserver Group**
+- Name: `pihole`, Nameserver: your Mac Mini's Netbird IP + port 53, Match Domains: `homelab.internal`, `homelab.lan`
+- Assign to all peers
+
+Now off-LAN devices resolve `*.homelab.internal` via Pi-hole through the tunnel.
+
+> **Known cellular limitation (Vodafone NL CGNAT).** iPhones on Vodafone cellular stay on a Netbird relay (not direct P2P) because the carrier's CGNAT blocks direct WireGuard even with UPnP + explicit port-forward. Home wifi is direct + full speed. Cellular streaming is capped by shared relay bandwidth. Workaround: in the Jellyfin iOS app, Quality → Max Cellular Bitrate = 3 Mbps. Real fix: Cloudflare Tunnel with a real domain, so streaming goes over Cloudflare's edge instead of the Netbird relay.
 
 ---
 
@@ -394,10 +481,11 @@ The single biggest speed boost you can make. Do this once you're comfortable and
 
 Once the basics work, add these one at a time:
 
-- **Immich** — self-hosted Google Photos replacement, with AI face recognition
+- **Cloudflare Tunnel** — buy a domain (~€10/yr, Cloudflare Registrar is zero-hassle), point a subdomain (`jellyfin.yourdomain.com`) at your homelab through Cloudflare's edge. Solves the cellular relay bandwidth cap in §5, gives you a real HTTPS cert, and lets friends/family reach Jellyfin/Jellyseerr with no VPN client at all.
 - **Vaultwarden** — self-hosted Bitwarden (password manager). Tiny, always worth running.
+- **Offsite backups** — Duplicati or restic to Backblaze B2 (~€0.005/GB/mo). Covers Nextcloud data + your `~/homelab/` compose config folder. Without this a single drive failure loses everything.
+- **Immich** — self-hosted Google Photos replacement, with AI face recognition
 - **Home Assistant** — smart home hub (works with lights, sensors, cameras from many brands)
-- **The *arr stack** — Sonarr (TV shows), Radarr (movies), Prowlarr (indexer aggregator), qBittorrent, Jellyseerr (request UI) — automates finding and downloading media
 - **Paperless-ngx** — scan documents, OCR them, searchable archive
 - **A second machine** — once you outgrow the Mac Mini, get a used Dell OptiPlex or Lenovo ThinkCentre ($100-200), install Proxmox, run VMs
 

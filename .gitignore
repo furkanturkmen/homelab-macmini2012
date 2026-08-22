@@ -5,9 +5,19 @@ nextcloud/
 jellyfin/
 uptime-kuma/
 npm/
+bazarr/
+radarr/
+sonarr/
+prowlarr/
+qbittorrent/
+jellyseerr/
 *.env
 .env
+!.env.example
 *.secret
+
+# Personal helper scripts (kept outside repo at C:\Users\Furkan\homelab-scripts\)
+*.ps1
 
 # OS junk
 .DS_Store
