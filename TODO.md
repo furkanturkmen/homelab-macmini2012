@@ -714,6 +714,66 @@ needs a route to the mini.
 
 ---
 
+### Step 6.6 — Native notifications in your own app (optional, needs a paid Apple account)
+
+`jellylab-push` subscribes to the ntfy topic and forwards each event to Expo
+Push, so notifications land in the jellylab app itself instead of the ntfy app.
+It is running and tested end to end. It is also **parked**, for a reason worth
+recording:
+
+> Apple only issues the `aps-environment` entitlement to a **paid Developer
+> Program** membership. Every background push to an iOS app goes through APNS,
+> APNS requires that entitlement, and a free personal team cannot have it.
+> `xcodebuild` refuses outright:
+>
+> ```
+> Personal development teams do not support the Push Notifications capability
+> Entitlements file defines "aps-environment" which is not registered
+> ```
+>
+> This is exactly why the ntfy app exists: they hold the entitlement so you do
+> not have to buy one. Nothing in this repo can work around it.
+
+Because the app must still build on a free team, `jellylab` carries a local
+config plugin (`plugins/withoutPushEntitlement.js`) that removes the
+entitlement after `expo-notifications` adds it. Dropping the package from
+`app.json` plugins is not enough — it applies its own plugin whenever
+installed — and uninstalling it breaks the Metro bundle, since the `require`
+is resolved statically.
+
+**To turn it on later:** join the Developer Program, delete that plugin from
+`app.json`, run `npx expo prebuild --clean`, rebuild. Then in the app:
+Profile → Notifications → the `jellylab-push` address and
+`PUSH_REGISTER_SECRET` → Test connection → toggle on. No code changes.
+
+#### How the bridge works
+
+```
+Radarr ─┐
+Sonarr ─┼─▶ ntfy ─▶ jellylab-push ─▶ Expo Push ─▶ APNS ─▶ app
+Seerr  ─┘
+```
+
+It subscribes to ntfy rather than taking webhooks directly, so the Radarr,
+Sonarr and Seerr connections from Steps 6.3 and 6.4 stay untouched, and any
+source added later reaches the app just by publishing to the same topic. ntfy
+also keeps a browsable history that push notifications do not.
+
+No npm dependencies: Node's global `fetch` covers both the ntfy stream and the
+Expo API, so it runs on a stock `node:22-alpine` with `jellylab-push/index.mjs`
+mounted in. Nothing to build, nothing to keep patched.
+
+Health check, which needs no auth:
+
+```bash
+curl http://<ip>:8099/health     # {"ok":true,"devices":0}
+```
+
+`devices` is how many phones have registered. It stays 0 until the entitlement
+exists.
+
+---
+
 ## Later / stretch goals
 
 Once the basics work, add these one at a time:
