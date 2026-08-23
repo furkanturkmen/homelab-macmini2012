@@ -13,6 +13,8 @@ qbittorrent/
 jellyseerr/
 ntfy/
 jellylab-push-data/
+gluetun/*
+!gluetun/update-qbit-port.sh
 7dtd/
 *.env
 .env

@@ -188,10 +188,68 @@ services:
     ports:
       - "9696:9696"
 
+  # WireGuard tunnel that qBittorrent lives inside. Nothing else routes through
+  # it - Jellyfin, Nextcloud and the *arr apps keep the normal connection.
+  gluetun:
+    container_name: gluetun
+    image: qmcgaw/gluetun:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    # qBittorrent has no network of its own, so its ports are published here
+    ports:
+      - "8083:8083"
+      - "6881:6881/tcp"
+      - "6881:6881/udp"
+    environment:
+      TZ: "${TZ}"
+      # "custom" rather than "protonvpn" on purpose. With the protonvpn
+      # provider, gluetun supplies the peer public key and endpoint from its
+      # own bundled server list - and when that is out of step with reality the
+      # handshake is rejected silently, because WireGuard never reports a bad
+      # peer. Every value below comes from the .conf Proton issued instead, so
+      # there is nothing left to be stale.
+      VPN_SERVICE_PROVIDER: "custom"
+      VPN_TYPE: "wireguard"
+      WIREGUARD_PRIVATE_KEY: "${WIREGUARD_PRIVATE_KEY}"
+      WIREGUARD_PUBLIC_KEY: "${WIREGUARD_PUBLIC_KEY}"
+      WIREGUARD_ADDRESSES: "${WIREGUARD_ADDRESSES}"
+      VPN_ENDPOINT_IP: "${VPN_ENDPOINT_IP}"
+      VPN_ENDPOINT_PORT: "${VPN_ENDPOINT_PORT}"
+      # Proton only permits DNS to their own resolver inside the tunnel.
+      # gluetun defaults to DNS-over-TLS via Cloudflare, which Proton resets -
+      # so every lookup fails, the healthcheck fails, and it restart-loops even
+      # though the tunnel itself is fine. Use the resolver from Proton's config.
+      DOT: "off"
+      DNS_ADDRESS: "10.2.0.1"
+      # Give the tunnel room to settle before the healthcheck starts killing
+      # and restarting it - a 10s loop makes every failure look identical and
+      # leaves no window to diagnose anything.
+      HEALTH_VPN_DURATION_INITIAL: "120s"
+      # Proton hands out a new forwarded port on every reconnect; without
+      # pushing it into qBittorrent it would keep announcing a dead one and
+      # quietly stop accepting incoming peers.
+      VPN_PORT_FORWARDING: "on"
+      VPN_PORT_FORWARDING_PROVIDER: "protonvpn"
+      VPN_PORT_FORWARDING_UP_COMMAND: "/gluetun/update-qbit-port.sh {{PORTS}}"
+      # Reply traffic to the WebUI. Without these the firewall drops responses
+      # to anything off the container network - LAN and VPN clients included.
+      FIREWALL_OUTBOUND_SUBNETS: "192.168.68.0/22,100.64.0.0/10,172.16.0.0/12"
+    volumes:
+      - ./gluetun:/gluetun
+
   qbittorrent:
     container_name: qbittorrent
     image: linuxserver/qbittorrent:latest
     restart: unless-stopped
+    # Shares gluetun's network namespace: if the tunnel drops there is no other
+    # interface to fall back to, so it cannot leak. A real kill switch rather
+    # than a best-effort interface bind.
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
     environment:
       PUID: "${PUID}"
       PGID: "${PGID}"
@@ -200,10 +258,6 @@ services:
     volumes:
       - ./qbittorrent/config:/config
       - /mnt/media:/media
-    ports:
-      - "8083:8083"
-      - "6881:6881"
-      - "6881:6881/udp"
 
   flaresolverr:
     container_name: flaresolverr
