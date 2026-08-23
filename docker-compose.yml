@@ -354,5 +354,7 @@ services:
     volumes:
       - ./jellylab-push:/app:ro
       - ./jellylab-push-data:/data
+      # read-only, purely so /storage can report free space on the media disk
+      - /mnt/media:/media:ro
     depends_on:
       - ntfy

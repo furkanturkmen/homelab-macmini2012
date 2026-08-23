@@ -14,7 +14,7 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, statfs } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 const {
@@ -25,6 +25,7 @@ const {
   PUSH_REGISTER_SECRET,
   PUSH_PORT = '8099',
   DEVICES_FILE = '/data/devices.json',
+  MEDIA_PATH = '/media',
 } = process.env;
 
 for (const [k, v] of Object.entries({ NTFY_TOPIC, NTFY_USER, NTFY_PASSWORD, PUSH_REGISTER_SECRET })) {
@@ -186,6 +187,22 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/health') {
     return send(res, 200, { ok: true, devices: devices.size });
+  }
+
+  // Disk usage of the volume holding the media library, for the app to show.
+  // Unauthenticated like /health: it is three numbers about free space on a
+  // service that is only reachable over the LAN or the VPN anyway, and
+  // requiring the push secret would mean no storage readout until push is set
+  // up - which it may never be.
+  if (url.pathname === '/storage') {
+    try {
+      const s = await statfs(MEDIA_PATH);
+      const total = s.blocks * s.bsize;
+      const free = s.bavail * s.bsize;
+      return send(res, 200, { total, free, used: total - free, path: MEDIA_PATH });
+    } catch (err) {
+      return send(res, 500, { error: `cannot read ${MEDIA_PATH}: ${err.message}` });
+    }
   }
 
   // Registration is reachable from the LAN, so it needs a shared secret -
