@@ -277,3 +277,25 @@ services:
     volumes:
       - ./ntfy/lib:/var/lib/ntfy
       - ./ntfy/cache:/var/cache/ntfy
+
+  jellylab-push:
+    container_name: jellylab-push
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: node /app/index.mjs
+    ports:
+      - "8099:8099"
+    environment:
+      TZ: "${TZ}"
+      NTFY_URL: "http://ntfy"
+      NTFY_TOPIC: "${NTFY_TOPIC}"
+      NTFY_USER: "${NTFY_USER}"
+      NTFY_PASSWORD: "${NTFY_PASSWORD}"
+      PUSH_REGISTER_SECRET: "${PUSH_REGISTER_SECRET}"
+      DEVICES_FILE: "/data/devices.json"
+    volumes:
+      - ./jellylab-push:/app:ro
+      - ./jellylab-push-data:/data
+    depends_on:
+      - ntfy
