@@ -29,9 +29,9 @@ Total setup time from a fresh computer: **about 2-3 hours**.
 
 - **Mac mini (Late 2012)** — Apple model A1347, [identifier Macmini6,2](https://support.apple.com/en-us/111926)
 - **Intel Core i7-3615QM** — 2.3 GHz, 4 cores, 8 threads, 6 MB L3 cache (Ivy Bridge)
-- **Intel HD Graphics 4000** — integrated GPU, too weak for hardware video transcoding
+- **Intel HD Graphics 4000** — integrated GPU. Does H.264 hardware transcoding via VA-API (Quick Sync). No HEVC, VP9 or AV1 support.
 - **16 GB DDR3-1600 RAM** — maximum this model supports, cannot upgrade
-- **Crucial MX100 512 GB SATA SSD** — swapped in from day one; huge speed jump over the stock 500 GB HDD
+- **Crucial MX100 512 GB SATA SSD** — the boot disk. If your Mac Mini is still on its stock 5400 rpm HDD, swapping in an SSD is the single biggest speed difference you can make on this machine — do it before installing Ubuntu, not after.
 - **Gigabit Ethernet** — always used (Broadcom wifi and Bluetooth skipped, driver support on Linux is poor)
 
 ---
@@ -54,11 +54,13 @@ Docker runs applications in isolated boxes called "containers." Each service (Je
 
 ## Services running on this homelab
 
-Each service listens on a "port" (like a channel number on the server). You reach them either by IP + port (`http://<mac-mini-ip>:<port>`) or via a friendly hostname through Nginx Proxy Manager (`http://<service>.homelab.internal`) once DNS is set up.
+Each service listens on a "port" (like a channel number on the server). You reach them either by IP + port (`http://<mac-mini-ip>:<port>`) or via a friendly hostname through Nginx Proxy Manager (`http://<service>.yourdomain.internal`) once DNS is set up.
+
+> **`yourdomain` is a placeholder.** Pick any name you like and use it consistently in Pi-hole and NPM — `home.internal`, `lab.internal`, whatever. Nothing in `docker-compose.yml` depends on it; it only exists in the Pi-hole DNS records and the NPM proxy hosts you create by hand.
 
 ### Network
-- **Pi-hole** — network-wide ad blocker + local DNS. Serves records for `*.homelab.internal`. Port `8080` for admin.
-- **Nginx Proxy Manager (NPM)** — reverse proxy that turns `jellyfin.homelab.internal` into `http://jellyfin:8096` behind the scenes. Port `81` for admin.
+- **Pi-hole** — network-wide ad blocker + local DNS. Serves records for `*.yourdomain.internal`. Port `8080` for admin.
+- **Nginx Proxy Manager (NPM)** — reverse proxy that turns `jellyfin.yourdomain.internal` into `http://jellyfin:8096` behind the scenes. Port `81` for admin.
 - **Netbird** — free WireGuard-based mesh VPN. Reach your homelab from anywhere. Installed on the host, not in Docker.
 
 ### Admin
@@ -155,7 +157,7 @@ Open a web browser on any device on your home network and visit:
 
 Find the Mac Mini's IP by SSH'ing in and running `ip -4 addr show`. Look for the number that starts with `192.168.` or `10.`.
 
-Once NPM is set up you can also reach each service by hostname: `http://jellyfin.homelab.internal`, `http://nextcloud.homelab.internal`, etc.
+Once NPM is set up you can also reach each service by hostname: `http://jellyfin.yourdomain.internal`, `http://nextcloud.yourdomain.internal`, etc.
 
 ---
 
@@ -163,9 +165,9 @@ Once NPM is set up you can also reach each service by hostname: `http://jellyfin
 
 - **The Mac Mini becomes headless** — no monitor, no keyboard once set up. You control it from your laptop via SSH.
 - **Broadcom wifi and Bluetooth don't work well on Linux** for this model. Use Ethernet only.
-- **The Intel HD 4000 GPU is too weak** to convert video formats on-the-fly for Jellyfin. Play files in their original format via a native player (Jellyfin Media Player, Infuse, Kodi) — avoid the browser player for heavy files.
+- **Hardware transcoding works, but H.264 only.** The HD 4000 does H.264 decode + encode in hardware via VA-API. Measured on this machine: **177 fps (7.4x realtime)** for a 1080p H.264 transcode, versus 62 fps (2.6x) on the CPU. HEVC/H.265, VP9 and AV1 have no hardware path and fall back to the CPU, which struggles above 1080p. HDR tone-mapping is not possible. Setup steps in [TODO.md](TODO.md).
 - **16 GB RAM is the ceiling.** With all 16 services idle it sits around 3 GB used — plenty of headroom for normal use.
-- **HTTPS on `*.homelab.internal` won't work** — it's a private TLD, Let's Encrypt can't issue a certificate. Use plain HTTP internally, and switch to a real domain + Cloudflare Tunnel if you want to expose anything publicly.
+- **HTTPS on `*.yourdomain.internal` is not possible** — `.internal` is a reserved private TLD, so no public CA can issue a certificate for it. Either stay on plain HTTP inside the LAN, or move your internal hostnames onto a subdomain of a domain you actually own (`jellyfin.home.example.com`) and let NPM issue certs through the Cloudflare **DNS-01** challenge. DNS-01 validates over DNS records instead of an HTTP request, so it works for names that only resolve on your LAN, with nothing exposed to the internet.
 - **Runtime data is excluded** from this repo via `.gitignore`. Each service writes its own data locally on your machine (photos in Nextcloud, media library in Jellyfin, etc.). Only the recipe files are tracked here.
 
 ---
@@ -174,10 +176,11 @@ Once NPM is set up you can also reach each service by hostname: `http://jellyfin
 
 Rough phases in [TODO.md](TODO.md):
 
+0. Optional: swap the stock 5400 rpm HDD for an SSD — do this before installing anything
 1. Install Ubuntu Server on Mac Mini
 2. Set up SSH access and install Docker
 3. Deploy the stack via docker-compose
-4. Run first-run wizards for each service (Portainer, NPM, Nextcloud, Jellyfin, *arr, Jellyseerr)
+4. Run first-run wizards for each service (Portainer, NPM, Nextcloud, Jellyfin, *arr, Jellyseerr), then enable VA-API hardware transcoding for Jellyfin
 5. Point your router's DNS at Pi-hole for LAN-wide ad blocking
 6. Install Netbird for remote access
 7. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
