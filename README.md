@@ -30,6 +30,9 @@ Total setup time from a fresh computer: **about 2-3 hours**.
 - **Mac mini (Late 2012)** — Apple model A1347, [identifier Macmini6,2](https://support.apple.com/en-us/111926)
 - **Intel Core i7-3615QM** — 2.3 GHz, 4 cores, 8 threads, 6 MB L3 cache (Ivy Bridge)
 - **Intel HD Graphics 4000** — integrated GPU. Does H.264 hardware transcoding via VA-API (Quick Sync). No HEVC, VP9 or AV1 support.
+  This is a hard limit of the silicon, not a setting, and it decides what the library should hold: an HEVC or AV1 file has to be
+  decoded in software before it can be re-encoded for a client, which this CPU cannot sustain in realtime. See [TODO.md](TODO.md)
+  Phase 8 for how the *arr apps are told to prefer H.264, and what that looks like when they are not.
 - **16 GB DDR3-1600 RAM** — maximum this model supports, cannot upgrade
 - **Crucial MX100 512 GB SATA SSD** — the boot disk. If your Mac Mini is still on its stock 5400 rpm HDD, swapping in an SSD is the single biggest speed difference you can make on this machine — do it before installing Ubuntu, not after.
 - **Gigabit Ethernet** — always used (Broadcom wifi and Bluetooth skipped, driver support on Linux is poor)
@@ -193,7 +196,8 @@ Rough phases in [TODO.md](TODO.md):
 6. Install Netbird for remote access
 7. Push notifications on import via ntfy (Radarr/Sonarr/Seerr) — see [TODO.md](TODO.md) Phase 6
 8. Route qBittorrent through a VPN with a real kill switch — Phase 7
-9. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
+9. Score H.264 above HEVC/AV1 in Sonarr and Radarr, so the server stops transcoding what it cannot hardware-decode — Phase 8
+10. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
 
