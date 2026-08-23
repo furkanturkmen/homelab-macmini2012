@@ -19,7 +19,7 @@ You get privacy, save money over time, and learn a ton.
 
 ## What is this project?
 
-A single Mac Mini from 2012 running a stack of 17 services. Everything is defined in `docker-compose.yml`. You install one thing (Docker), tell it "read this file," and it downloads and runs every service automatically.
+A single Mac Mini from 2012 running a stack of 19 services. Everything is defined in `docker-compose.yml`. You install one thing (Docker), tell it "read this file," and it downloads and runs every service automatically.
 
 Total setup time from a fresh computer: **about 2-3 hours**.
 
@@ -63,6 +63,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 - **Nginx Proxy Manager (NPM)** — reverse proxy that turns `jellyfin.yourdomain.internal` into `http://jellyfin:8096` behind the scenes. Port `81` for admin.
 - **Netbird** — free WireGuard-based mesh VPN. Reach your homelab from anywhere. Installed on the host, not in Docker.
 - **ntfy** — self-hosted push notifications. Radarr/Sonarr ping it on import, Seerr on request events. Port `8095`.
+- **jellylab-push** — bridges ntfy events into native notifications for the companion iOS app. Port `8099`. Built and working, but parked: Apple only grants the push entitlement to paid Developer Program accounts.
 
 ### Admin
 - **Portainer** — web UI showing every container, click to start/stop/restart. Port `9000`.
@@ -93,6 +94,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Network | Nginx Proxy Manager | 80 / 443 / 81 | Reverse proxy + HTTPS |
 | Network | Netbird (on host) | — | Mesh VPN for remote access |
 | Network | ntfy | 8095 | Self-hosted push notifications |
+| Network | jellylab-push | 8099 | ntfy to iOS app push bridge |
 | Admin | Portainer | 9000 / 9443 | Docker web UI |
 | Admin | Uptime Kuma | 3001 | Service monitor |
 | Admin | Watchtower | — | Auto-updater |
@@ -157,6 +159,7 @@ Open a web browser on any device on your home network and visit:
 | qBittorrent | `http://<ip>:8083` |
 | Jellyseerr | `http://<ip>:5055` |
 | ntfy | `http://<ip>:8095` |
+| jellylab-push (health) | `http://<ip>:8099/health` |
 
 Find the Mac Mini's IP by SSH'ing in and running `ip -4 addr show`. Look for the number that starts with `192.168.` or `10.`.
 
@@ -169,7 +172,7 @@ Once NPM is set up you can also reach each service by hostname: `http://jellyfin
 - **The Mac Mini becomes headless** — no monitor, no keyboard once set up. You control it from your laptop via SSH.
 - **Broadcom wifi and Bluetooth don't work well on Linux** for this model. Use Ethernet only.
 - **Hardware transcoding works, but H.264 only.** The HD 4000 does H.264 decode + encode in hardware via VA-API. Measured on this machine: **177 fps (7.4x realtime)** for a 1080p H.264 transcode, versus 62 fps (2.6x) on the CPU. HEVC/H.265, VP9 and AV1 have no hardware path and fall back to the CPU, which struggles above 1080p. HDR tone-mapping is not possible. Setup steps in [TODO.md](TODO.md).
-- **16 GB RAM is the ceiling.** With all 16 services idle it sits around 3 GB used — plenty of headroom for normal use.
+- **16 GB RAM is the ceiling.** With everything idle it sits around 2 GB used — plenty of headroom for normal use.
 - **HTTPS on `*.yourdomain.internal` is not possible** — `.internal` is a reserved private TLD, so no public CA can issue a certificate for it. Either stay on plain HTTP inside the LAN, or move your internal hostnames onto a subdomain of a domain you actually own (`jellyfin.home.example.com`) and let NPM issue certs through the Cloudflare **DNS-01** challenge. DNS-01 validates over DNS records instead of an HTTP request, so it works for names that only resolve on your LAN, with nothing exposed to the internet.
 - **Runtime data is excluded** from this repo via `.gitignore`. Each service writes its own data locally on your machine (photos in Nextcloud, media library in Jellyfin, etc.). Only the recipe files are tracked here.
 
@@ -186,7 +189,7 @@ Rough phases in [TODO.md](TODO.md):
 4. Run first-run wizards for each service (Portainer, NPM, Nextcloud, Jellyfin, *arr, Jellyseerr), then enable VA-API hardware transcoding for Jellyfin
 5. Point your router's DNS at Pi-hole for LAN-wide ad blocking
 6. Install Netbird for remote access
-7. Push notifications on import via ntfy (Radarr/Sonarr/Seerr)
+7. Push notifications on import via ntfy (Radarr/Sonarr/Seerr) — see [TODO.md](TODO.md) Phase 6
 8. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
