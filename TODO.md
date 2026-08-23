@@ -15,6 +15,40 @@ This guide takes you from "I have an old computer" to "I have a working homelab"
 
 ---
 
+## Phase 0 — Check the drive first (optional, but do it now if at all)
+
+Most Late 2012 Mac Minis shipped with a **5400 rpm 2.5" hard drive**. If yours still has one, swap it for an SSD *before* you install Ubuntu. Doing it afterwards means reinstalling everything from scratch.
+
+An SSD is the single biggest speed difference you can make on this machine — far more than RAM or CPU. Container startup, Nextcloud, the *arr apps and the Jellyfin library scan are all limited by random reads that a spinning disk is bad at.
+
+**Already have an SSD?** If the machine already runs Linux, check with:
+
+```bash
+lsblk -d -o NAME,MODEL,SIZE,ROTA
+```
+
+`ROTA=0` means solid state — skip this phase. `ROTA=1` means it is a spinning disk. On macOS: **About This Mac → System Report → Storage**, look at "Medium Type".
+
+### What to buy
+
+- **2.5" SATA SSD**, 500 GB or 1 TB. Crucial MX500 or Samsung 870 EVO are the safe picks.
+- **T6 Torx screwdriver** — internal screws
+- **T8 Torx screwdriver** — drive bracket
+- **Plastic spudger or an old credit card** — to pop the case open
+
+The Mac Mini's port is SATA III (6 Gb/s), so any modern 2.5" SATA SSD runs at full speed. There is no NVMe slot on this model — that arrived with the 2014 Mac Mini.
+
+### Doing the swap
+
+- Power the Mac Mini off and unplug it
+- Follow the iFixit guide: search **"Mac Mini Late 2012 Hard Drive Replacement"**
+- Budget 30–45 minutes if you are careful. The bottom cover twists off — no glue, no adhesive
+- While the machine is open, this is also the moment to replace the CPU thermal paste if you ever plan to
+
+Then continue with Phase 1 as normal.
+
+---
+
 ## Phase 1 — Install Ubuntu on the Mac Mini
 
 This wipes the Mac Mini completely and installs Ubuntu Linux.
@@ -337,7 +371,7 @@ sudo chown -R $USER:$USER /mnt/media
 
 Add libraries inside Jellyfin pointing at `/media/movies` (content type Movies, TMDB scraper), `/media/tv` (Shows, TMDB), `/media/music` (Music, MusicBrainz + TheAudioDB), and `/media/anime` (Shows, Japan country). Then install anime plugins after the wizard: **Dashboard → Plugins → Catalog → Metadata → AniDB + AniList → Restart Jellyfin → edit Anime library → enable AniDB (top), AniList, TMDB fallback**.
 
-Also — leave **Hardware acceleration: None** in Dashboard → Playback → Transcoding. The HD 4000 is too weak for QSV; enabling it crashes ffmpeg. Play files in original format via clients that direct-play (Jellyfin Media Player, Infuse, Kodi, Swiftfin). Avoid the browser player — it triggers transcoding.
+Hardware acceleration **does** work on this machine, but only for H.264 — see the VA-API setup step further down. The HD 4000 has no HEVC, VP9 or AV1 decoder, so those still transcode on the CPU. Direct-play clients (Jellyfin Media Player, Infuse, Kodi, Swiftfin) avoid transcoding entirely and remain the lightest option; the browser player almost always triggers a transcode.
 
 **7. Prowlarr — `http://homelab:9696` (do BEFORE Radarr/Sonarr — feeds them)**
 
@@ -406,6 +440,103 @@ Now every device on your wifi uses Pi-hole automatically. Ads gone.
 
 ---
 
+### Step 4.7 — Enable hardware transcoding (VA-API)
+
+The HD 4000 has a working H.264 encoder and decoder (Intel Quick Sync). Jellyfin can use it, which cuts transcode CPU load dramatically. Measured on this exact machine, transcoding a 1080p H.264 High file down to 1080p @ 4 Mbps:
+
+| Path | Speed |
+|------|-------|
+| Hardware (VAAPI) | **177 fps — 7.4x realtime** |
+| Software (libx264 `veryfast`) | 62 fps — 2.6x realtime |
+
+Roughly 2.8x faster, and it leaves the CPU free for Nextcloud, the *arr apps and downloads.
+
+**What it can and cannot do.** The Ivy Bridge GPU supports H.264, MPEG-2 and VC-1 in hardware. It has **no** HEVC/H.265, VP9 or AV1 decoder — those fall back to the CPU and are slow above 1080p. HDR tone-mapping is not supported at all. If most of your library is x265, hardware acceleration will not help you much.
+
+**You do not need to install anything on Ubuntu.** The `jellyfin/jellyfin` image ships its own VA-API drivers (`i965_drv_video.so`) inside `/usr/lib/jellyfin-ffmpeg/lib/dri/`. No `apt install` on the host is required. The container just needs access to the GPU device.
+
+#### 1. Find your `render` group ID
+
+```bash
+getent group render video
+```
+
+Output looks like `render:x:991:` and `video:x:44:`. Note both numbers — the render GID differs between machines.
+
+#### 2. Give the Jellyfin container the GPU
+
+In `docker-compose.yml`, add `devices:` and `group_add:` to the `jellyfin` service:
+
+```yaml
+  jellyfin:
+    container_name: jellyfin
+    image: jellyfin/jellyfin:latest
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "44"    # video group
+      - "991"   # render group — use YOUR number from step 1
+    volumes:
+      - ./jellyfin/config:/config
+      - ./jellyfin/cache:/cache
+      - /mnt/media:/media
+    environment:
+      TZ: "${TZ}"
+```
+
+Apply it:
+
+```bash
+docker compose up -d jellyfin
+```
+
+#### 3. Verify the GPU is visible inside the container
+
+```bash
+docker exec jellyfin /usr/lib/jellyfin-ffmpeg/vainfo
+```
+
+You should see it try the newer `iHD` driver, **fail**, then fall back to `i965` and succeed — that is normal and correct on Ivy Bridge:
+
+```
+libva error: .../iHD_drv_video.so init failed
+libva info: Trying to open .../i965_drv_video.so
+vainfo: Driver version: Intel i965 driver for Intel(R) Ivybridge Mobile - 2.4.0.pre1
+      VAProfileH264High               : VAEntrypointVLD
+      VAProfileH264High               : VAEntrypointEncSlice
+```
+
+`VAEntrypointVLD` on an H.264 profile means hardware **decode** works. `VAEntrypointEncSlice` means hardware **encode** works. If you instead get `vaInitialize failed`, the container cannot reach the device — recheck the render GID from step 1.
+
+#### 4. Turn it on in Jellyfin
+
+**Dashboard → Playback → Transcoding**:
+
+- **Hardware acceleration:** `Video Acceleration API (VAAPI)`
+- **VA-API Device:** `/dev/dri/renderD128`
+- **Enable hardware decoding for:** tick **H264**, **MPEG2**, **VC1** only. Leave HEVC, VP9, AV1, HEVC 10bit and VP9 10bit **unticked** — the hardware cannot do them, and ticking them causes playback to fail rather than fall back cleanly.
+- **Allow encoding in HEVC format:** **off**
+- **Enable Tone mapping / VPP Tone mapping:** **off** (needs hardware this GPU does not have)
+- **Enable hardware encoding:** **on**
+
+Save, then play something that forces a transcode (lower the quality in the web player) and confirm it works.
+
+#### 5. Confirm it is actually using the GPU
+
+While a transcode is running:
+
+```bash
+sudo apt install intel-gpu-tools
+sudo intel_gpu_top
+```
+
+The **Video** engine row should show activity. If it sits at 0% while the CPU is pinned, Jellyfin is still transcoding in software — check the Jellyfin playback log for the ffmpeg command line and look for `h264_vaapi`.
+
+---
+
 ## Phase 5 — Remote access with Netbird
 
 Netbird is a free WireGuard-based mesh VPN. Lets you reach the Mac Mini from your phone at a cafe, laptop at work, etc. — without opening ports on your router.
@@ -439,41 +570,17 @@ By default Netbird only lets peers reach each other by their Netbird IPs. To rea
 
 Now phones on 4G can reach `192.168.1.42:PORT` as if they were on your wifi.
 
-### Step 5.4 — Add split-DNS for `*.homelab.internal`
+### Step 5.4 — Add split-DNS for `*.yourdomain.internal`
 
-If you set up Pi-hole with local hostnames like `jellyfin.homelab.internal`:
+If you set up Pi-hole with local hostnames like `jellyfin.yourdomain.internal`:
 
 - Netbird admin → **DNS** → **Add Nameserver Group**
-- Name: `pihole`, Nameserver: your Mac Mini's Netbird IP + port 53, Match Domains: `homelab.internal`, `homelab.lan`
+- Name: `pihole`, Nameserver: your Mac Mini's Netbird IP + port 53, Match Domains: `yourdomain.internal`, `yourdomain.lan`
 - Assign to all peers
 
-Now off-LAN devices resolve `*.homelab.internal` via Pi-hole through the tunnel.
+Now off-LAN devices resolve `*.yourdomain.internal` via Pi-hole through the tunnel.
 
 > **Known cellular limitation (Vodafone NL CGNAT).** iPhones on Vodafone cellular stay on a Netbird relay (not direct P2P) because the carrier's CGNAT blocks direct WireGuard even with UPnP + explicit port-forward. Home wifi is direct + full speed. Cellular streaming is capped by shared relay bandwidth. Workaround: in the Jellyfin iOS app, Quality → Max Cellular Bitrate = 3 Mbps. Real fix: Cloudflare Tunnel with a real domain, so streaming goes over Cloudflare's edge instead of the Netbird relay.
-
----
-
-## Phase 6 — Upgrade the HDD to an SSD
-
-The single biggest speed boost you can make. Do this once you're comfortable and have $50-80.
-
-### Step 6.1 — Buy the parts
-
-- **2.5" SATA SSD**, 500 GB or 1 TB. Recommended: Crucial MX500 or Samsung 870 EVO.
-- **T6 Torx screwdriver** — for internal screws
-- **T8 Torx screwdriver** — for the drive bracket
-- **Plastic spudger or old credit card** — to pop the case open
-
-### Step 6.2 — Swap the drive
-
-- Power off the Mac Mini
-- Follow the iFixit guide: search for "Mac Mini Late 2012 Hard Drive Replacement"
-- Takes about 30-45 minutes if you're careful
-
-### Step 6.3 — Reinstall Ubuntu on the SSD
-
-- Repeat Phase 1 with the new SSD in place
-- Once Ubuntu is running, repeat Phases 2-4 (Docker + git clone + docker compose up)
 
 ---
 
