@@ -121,6 +121,11 @@ services:
     restart: unless-stopped
     ports:
       - "8096:8096"
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${VIDEO_GID}"
+      - "${RENDER_GID}"
     volumes:
       - ./jellyfin/config:/config
       - ./jellyfin/cache:/cache
@@ -211,7 +216,7 @@ services:
 
   jellyseerr:
     container_name: jellyseerr
-    image: fallenbagel/jellyseerr:latest
+    image: ghcr.io/seerr-team/seerr:latest
     restart: unless-stopped
     environment:
       LOG_LEVEL: info
@@ -221,3 +226,26 @@ services:
       - ./jellyseerr/config:/app/config
     ports:
       - "5055:5055"
+
+  # =========================================================
+  # GAME SERVER
+  # =========================================================
+
+  sevendtd:
+    container_name: 7dtd
+    image: vinanrra/7dtd-server:latest
+    restart: unless-stopped
+    ports:
+      - "26900:26900/tcp"
+      - "26900:26900/udp"
+      - "26901:26901/udp"
+      - "26902:26902/udp"
+    environment:
+      START_MODE: "1"
+      VERSION: "stable"
+      TimeZone: "${TZ}"
+    volumes:
+      - ./7dtd/config:/home/sdtdserver/serverfiles
+      - ./7dtd/saves:/home/sdtdserver/.local/share/7DaysToDie
+      - ./7dtd/backups:/home/sdtdserver/lgsm/backup
+      - ./7dtd/logs:/home/sdtdserver/log
