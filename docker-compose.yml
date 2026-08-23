@@ -263,7 +263,10 @@ services:
       - "8095:80"
     environment:
       TZ: "${TZ}"
-      NTFY_BASE_URL: "http://${HOST_LAN_IP}:8095"
+      # The Netbird address, not the LAN one: a phone subscribes over the VPN
+      # when away from home, and links inside notifications have to resolve
+      # from there too.
+      NTFY_BASE_URL: "${NTFY_BASE_URL}"
       # iOS cannot hold a background connection, so a self-hosted server can
       # only reach an iPhone by forwarding a wake-up ping through ntfy.sh,
       # which relays it via APNS. Only a hash of the topic leaves the network -

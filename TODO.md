@@ -688,6 +688,13 @@ Empty means every notification it sends has a dead link in it.
 
 ### Step 6.5 — The phone
 
+> **Native notifications inside your own iOS app need a paid Apple Developer
+> account.** Apple gates the `aps-environment` entitlement behind Developer
+> Program membership, and every background push to an iOS app goes through
+> APNS. A free personal team cannot build with it, which is why the ntfy app
+> exists: they paid for the entitlement so you do not have to. `jellylab-push`
+> is built and working server-side either way, ready for the day you join.
+
 1. Install **ntfy** from the App Store or Play Store
 2. Settings → **Manage users** → add your server URL, `NTFY_USER`, `NTFY_PASSWORD`
 3. **Subscribe to topic** → tick *Use another server* → enter the server URL and topic
