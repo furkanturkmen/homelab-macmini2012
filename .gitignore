@@ -11,6 +11,7 @@ sonarr/
 prowlarr/
 qbittorrent/
 jellyseerr/
+7dtd/
 *.env
 .env
 !.env.example
