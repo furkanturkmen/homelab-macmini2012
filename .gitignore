@@ -12,6 +12,7 @@ prowlarr/
 qbittorrent/
 jellyseerr/
 ntfy/
+jellylab-push-data/
 7dtd/
 *.env
 .env
