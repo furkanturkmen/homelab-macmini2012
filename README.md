@@ -19,7 +19,7 @@ You get privacy, save money over time, and learn a ton.
 
 ## What is this project?
 
-A single Mac Mini from 2012 running a stack of 19 services. Everything is defined in `docker-compose.yml`. You install one thing (Docker), tell it "read this file," and it downloads and runs every service automatically.
+A single Mac Mini from 2012 running a stack of 20 services. Everything is defined in `docker-compose.yml`. You install one thing (Docker), tell it "read this file," and it downloads and runs every service automatically.
 
 Total setup time from a fresh computer: **about 2-3 hours**.
 
@@ -62,6 +62,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 - **Pi-hole** — network-wide ad blocker + local DNS. Serves records for `*.yourdomain.internal`. Port `8080` for admin.
 - **Nginx Proxy Manager (NPM)** — reverse proxy that turns `jellyfin.yourdomain.internal` into `http://jellyfin:8096` behind the scenes. Port `81` for admin.
 - **Netbird** — free WireGuard-based mesh VPN. Reach your homelab from anywhere. Installed on the host, not in Docker.
+- **gluetun** — WireGuard tunnel that qBittorrent runs inside, so torrent traffic leaves via ProtonVPN instead of your home connection. Everything else keeps the normal route.
 - **ntfy** — self-hosted push notifications. Radarr/Sonarr ping it on import, Seerr on request events. Port `8095`.
 - **jellylab-push** — bridges ntfy events into native notifications for the companion iOS app. Port `8099`. Built and working, but parked: Apple only grants the push entitlement to paid Developer Program accounts.
 
@@ -93,6 +94,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Network | Pi-hole | 8080 | Ad blocker + local DNS |
 | Network | Nginx Proxy Manager | 80 / 443 / 81 | Reverse proxy + HTTPS |
 | Network | Netbird (on host) | — | Mesh VPN for remote access |
+| Network | gluetun | 8083 / 6881 | VPN tunnel qBittorrent runs inside |
 | Network | ntfy | 8095 | Self-hosted push notifications |
 | Network | jellylab-push | 8099 | ntfy to iOS app push bridge |
 | Admin | Portainer | 9000 / 9443 | Docker web UI |
@@ -106,7 +108,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Media | Sonarr | 8989 | TV / anime manager |
 | Media | Bazarr | 6767 | Subtitle auto-download |
 | Media | Prowlarr | 9696 | Indexer aggregator |
-| Media | qBittorrent | 8083 | Torrent client |
+| Media | qBittorrent | (via gluetun) | Torrent client, no network of its own |
 | Media | FlareSolverr | 8191 | Cloudflare challenge solver |
 | Media | Jellyseerr | 5055 | Request UI |
 
@@ -190,7 +192,8 @@ Rough phases in [TODO.md](TODO.md):
 5. Point your router's DNS at Pi-hole for LAN-wide ad blocking
 6. Install Netbird for remote access
 7. Push notifications on import via ntfy (Radarr/Sonarr/Seerr) — see [TODO.md](TODO.md) Phase 6
-8. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
+8. Route qBittorrent through a VPN with a real kill switch — Phase 7
+9. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
 
