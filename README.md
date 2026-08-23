@@ -19,7 +19,7 @@ You get privacy, save money over time, and learn a ton.
 
 ## What is this project?
 
-A single Mac Mini from 2012 running a stack of 16 services. Everything is defined in `docker-compose.yml`. You install one thing (Docker), tell it "read this file," and it downloads and runs every service automatically.
+A single Mac Mini from 2012 running a stack of 17 services. Everything is defined in `docker-compose.yml`. You install one thing (Docker), tell it "read this file," and it downloads and runs every service automatically.
 
 Total setup time from a fresh computer: **about 2-3 hours**.
 
@@ -62,6 +62,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 - **Pi-hole** — network-wide ad blocker + local DNS. Serves records for `*.yourdomain.internal`. Port `8080` for admin.
 - **Nginx Proxy Manager (NPM)** — reverse proxy that turns `jellyfin.yourdomain.internal` into `http://jellyfin:8096` behind the scenes. Port `81` for admin.
 - **Netbird** — free WireGuard-based mesh VPN. Reach your homelab from anywhere. Installed on the host, not in Docker.
+- **ntfy** — self-hosted push notifications. Radarr/Sonarr ping it on import, Seerr on request events. Port `8095`.
 
 ### Admin
 - **Portainer** — web UI showing every container, click to start/stop/restart. Port `9000`.
@@ -91,6 +92,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Network | Pi-hole | 8080 | Ad blocker + local DNS |
 | Network | Nginx Proxy Manager | 80 / 443 / 81 | Reverse proxy + HTTPS |
 | Network | Netbird (on host) | — | Mesh VPN for remote access |
+| Network | ntfy | 8095 | Self-hosted push notifications |
 | Admin | Portainer | 9000 / 9443 | Docker web UI |
 | Admin | Uptime Kuma | 3001 | Service monitor |
 | Admin | Watchtower | — | Auto-updater |
@@ -154,6 +156,7 @@ Open a web browser on any device on your home network and visit:
 | Prowlarr | `http://<ip>:9696` |
 | qBittorrent | `http://<ip>:8083` |
 | Jellyseerr | `http://<ip>:5055` |
+| ntfy | `http://<ip>:8095` |
 
 Find the Mac Mini's IP by SSH'ing in and running `ip -4 addr show`. Look for the number that starts with `192.168.` or `10.`.
 
@@ -183,7 +186,8 @@ Rough phases in [TODO.md](TODO.md):
 4. Run first-run wizards for each service (Portainer, NPM, Nextcloud, Jellyfin, *arr, Jellyseerr), then enable VA-API hardware transcoding for Jellyfin
 5. Point your router's DNS at Pi-hole for LAN-wide ad blocking
 6. Install Netbird for remote access
-7. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
+7. Push notifications on import via ntfy (Radarr/Sonarr/Seerr)
+8. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
 

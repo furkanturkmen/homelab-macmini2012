@@ -249,3 +249,31 @@ services:
       - ./7dtd/saves:/home/sdtdserver/.local/share/7DaysToDie
       - ./7dtd/backups:/home/sdtdserver/lgsm/backup
       - ./7dtd/logs:/home/sdtdserver/log
+
+  # =========================================================
+  # NOTIFICATIONS
+  # =========================================================
+
+  ntfy:
+    container_name: ntfy
+    image: binwiederhier/ntfy:latest
+    restart: unless-stopped
+    command: serve
+    ports:
+      - "8095:80"
+    environment:
+      TZ: "${TZ}"
+      NTFY_BASE_URL: "http://${HOST_LAN_IP}:8095"
+      # iOS cannot hold a background connection, so a self-hosted server can
+      # only reach an iPhone by forwarding a wake-up ping through ntfy.sh,
+      # which relays it via APNS. Only a hash of the topic leaves the network -
+      # message bodies are still served from here.
+      NTFY_UPSTREAM_BASE_URL: "https://ntfy.sh"
+      NTFY_AUTH_FILE: "/var/lib/ntfy/user.db"
+      NTFY_AUTH_DEFAULT_ACCESS: "deny-all"
+      NTFY_CACHE_FILE: "/var/cache/ntfy/cache.db"
+      NTFY_ATTACHMENT_CACHE_DIR: "/var/cache/ntfy/attachments"
+      NTFY_ENABLE_LOGIN: "true"
+    volumes:
+      - ./ntfy/lib:/var/lib/ntfy
+      - ./ntfy/cache:/var/cache/ntfy

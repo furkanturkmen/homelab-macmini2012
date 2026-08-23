@@ -584,6 +584,129 @@ Now off-LAN devices resolve `*.yourdomain.internal` via Pi-hole through the tunn
 
 ---
 
+## Phase 6 — Push notifications when a download finishes
+
+Get a push on your phone the moment Radarr or Sonarr imports something, plus
+Seerr request events. Runs entirely on your own server; nothing is exposed to
+the internet.
+
+### Why ntfy and not the *arr apps' own notifiers
+
+Radarr and Sonarr can post to Discord, Telegram and friends directly, but all
+of those mean handing a third party your library activity. ntfy is a tiny
+self-hosted push server with an iOS and Android app, and Seerr speaks it
+natively.
+
+### The one iOS catch
+
+An iPhone cannot hold a background connection, so a self-hosted ntfy cannot
+reach it on its own. The server config sets:
+
+```
+NTFY_UPSTREAM_BASE_URL: "https://ntfy.sh"
+```
+
+That forwards a **wake-up ping** through ntfy.sh so APNS can reach the phone.
+Only a hash of the topic leaves your network — the message body is still
+fetched from your own server. Without this, notifications only arrive while
+the app is open.
+
+Android does not need it.
+
+### Step 6.1 — Start ntfy
+
+Already in `docker-compose.yml`. Add three values to your `.env`:
+
+```bash
+# the topic name doubles as a shared secret - generate, do not pick
+head -c 12 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 16
+head -c 18 /dev/urandom | base64 | tr -d '/+=' | head -c 20
+```
+
+```
+NTFY_TOPIC=<first command's output, prefixed however you like>
+NTFY_USER=homelab
+NTFY_PASSWORD=<second command's output>
+```
+
+```bash
+cd ~/homelab && docker compose up -d ntfy
+```
+
+### Step 6.2 — Lock the topic down
+
+```bash
+set -a; . ./.env; set +a
+docker exec -e NTFY_PASSWORD="$NTFY_PASSWORD" ntfy ntfy user add --role=user "$NTFY_USER"
+docker exec ntfy ntfy access "$NTFY_USER" "$NTFY_TOPIC" rw
+docker exec ntfy ntfy access '*' "$NTFY_TOPIC" write-only
+```
+
+The last line is deliberate. Radarr, Sonarr and Seerr publish **without**
+credentials, which keeps their configs free of secrets, but reading requires a
+login — so nobody who stumbles on the topic can see your activity. The topic
+name is the write secret, which is why it must be random.
+
+Verify:
+
+```bash
+curl -s -o /dev/null -w "publish %{http_code}\n" -d test "http://localhost:8095/$NTFY_TOPIC"   # 200
+curl -s -o /dev/null -w "read    %{http_code}\n" "http://localhost:8095/$NTFY_TOPIC/json?poll=1" # 403
+```
+
+### Step 6.3 — Radarr and Sonarr
+
+Both run a small script on import. It lives in the app's own config directory,
+which is gitignored, and reaches ntfy over the compose network rather than the
+LAN — see `radarr/config/ntfy.sh` and `sonarr/config/ntfy.sh` on the server.
+
+Wire it up in each app: **Settings → Connect → + → Custom Script**
+
+- **Path:** `/config/ntfy.sh`
+- Tick **On Import** and **On Upgrade**, leave the rest off
+- **Test**, then Save
+
+Custom Script rather than the Webhook connection on purpose: webhook posts raw
+JSON, which arrives as a wall of braces. The script formats a readable line
+using the `radarr_*` / `sonarr_*` environment variables the app sets.
+
+### Step 6.4 — Seerr
+
+**Settings → Notifications → ntfy**
+
+- **Server URL:** `http://ntfy` (container name; no port needed)
+- **Topic:** your `NTFY_TOPIC`
+- Leave username and password empty — anonymous publish is allowed
+
+Enable **Request Approved**, **Request Declined** and **Request Failed** only.
+
+Deliberately leave **Media Available** off: Radarr and Sonarr already fire on
+import, so enabling it here double-notifies every single download.
+
+While you are in Seerr, check **Settings → General → Application URL** is set.
+Empty means every notification it sends has a dead link in it.
+
+### Step 6.5 — The phone
+
+1. Install **ntfy** from the App Store or Play Store
+2. Settings → **Manage users** → add your server URL, `NTFY_USER`, `NTFY_PASSWORD`
+3. **Subscribe to topic** → tick *Use another server* → enter the server URL and topic
+
+Off-LAN this needs Netbird up, since the server is only reachable inside your
+network. The wake-up still arrives via ntfy.sh, but fetching the message body
+needs a route to the mini.
+
+### What you end up with
+
+| Event | Source | Example |
+|-------|--------|---------|
+| Movie imported | Radarr | `Movie added — Dune Part Two (2024), Bluray-1080p` |
+| Episode imported | Sonarr | `Episode added — Frieren S01E12, WEBDL-1080p` |
+| Quality upgrade | either | same, reading `upgraded` |
+| Request approved / declined / failed | Seerr | request title |
+
+---
+
 ## Later / stretch goals
 
 Once the basics work, add these one at a time:
