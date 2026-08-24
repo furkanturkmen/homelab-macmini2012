@@ -197,7 +197,8 @@ Rough phases in [TODO.md](TODO.md):
 7. Push notifications on import via ntfy (Radarr/Sonarr/Seerr) — see [TODO.md](TODO.md) Phase 6
 8. Route qBittorrent through a VPN with a real kill switch — Phase 7
 9. Score H.264 above HEVC/AV1 in Sonarr and Radarr, so the server stops transcoding what it cannot hardware-decode — Phase 8
-10. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
+10. Guard against torrents that are executables wearing a release name, and demote the indexer that served one — Phase 9
+11. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
 
