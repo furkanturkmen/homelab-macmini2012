@@ -7,7 +7,8 @@ runtime data, so these are the reviewable copy.
 > The hostnames here read `jellyseerr.yourdomain.internal`, matching the rest of
 > this repo. Substitute the names your own NPM serves before copying these in —
 > the maps match on `$host` exactly, and a name that never matches makes the
-> whole file a no-op.
+> whole file a no-op. `http.conf` also proxies to `192.168.1.20:8082` — an
+> example address for a development machine, not a real one.
 
 **These are invisible in the NPM web UI.** NPM rewrites every file under
 `proxy_host/` from its own database whenever a host is saved, but it only
@@ -44,6 +45,35 @@ Two things worth keeping in mind if you edit them:
 - Every map default echoes `$upstream_http_access_control_allow_*`. An empty
   value would mean "clear this header" to headers-more, which silently stripped
   Jellyfin's own `Access-Control-Allow-Origin: *` the first time round.
+
+## The dev-preview host
+
+`http.conf` also defines a `server {}` block for `jellylab.yourdomain.internal`,
+proxying to an Expo web dev server on a laptop. It exists for one reason:
+cookies.
+
+Jellyseerr's `connect.sid` is an express-session cookie with no `SameSite`
+attribute, which browsers treat as `Lax` and never send on a **cross-site**
+request. A dev server on `http://localhost:8082` is a different site from
+`jellyseerr.yourdomain.internal`, so the session is unusable there no matter how
+correct the CORS headers are — the app signs in and then every authenticated
+call comes back `401 cookie 'connect.sid' required`. Served from a name under
+the same registrable domain, it is same-site, and the cookie travels.
+
+`SameSite=None` would be the other way out, but it requires `Secure`, and a
+`.internal` name can never hold a certificate.
+
+Measured, same request, same session, only the origin differing:
+
+| page served from | `GET /api/v1/request` |
+|------------------|-----------------------|
+| `http://localhost:8082` | `401 cookie 'connect.sid' required` |
+| `http://jellylab.yourdomain.internal` | `200` with results |
+
+It is deliberately not an NPM proxy host — NPM regenerates those from its
+database, and this one points at a laptop that is usually off. It also needs a
+DNS record (Pi-hole → the NPM host) for the name to resolve, and the upgrade
+headers in the block are what keep Metro's hot reload working through the proxy.
 
 ## Install
 
