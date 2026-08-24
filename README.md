@@ -172,6 +172,25 @@ Once NPM is set up you can also reach each service by hostname: `http://jellyfin
 
 ---
 
+## Proxy config the NPM UI does not show
+
+Nginx Proxy Manager rewrites every file under `npm/data/nginx/proxy_host/` from
+its own database each time a host is saved, so hand edits there do not survive.
+The exception is `npm/data/nginx/custom/`, which NPM includes and never touches
+— and never displays either. **Nothing in that directory appears anywhere in the
+web UI.**
+
+Reviewable copies live in [`npm-custom/`](npm-custom/), along with install,
+verify and removal commands. What they do today: add CORS headers to the
+Jellyseerr host for the Expo dev server's origin, so the JellyLab app can be run
+in a desktop browser. Jellyseerr sends none of its own and rejects preflights,
+which a browser reads as the service being unreachable while a plain tab loads
+it fine.
+
+If a proxied host behaves in a way the UI cannot explain, look there first.
+
+---
+
 ## Things to know before you start
 
 - **The Mac Mini becomes headless** — no monitor, no keyboard once set up. You control it from your laptop via SSH.
@@ -179,6 +198,7 @@ Once NPM is set up you can also reach each service by hostname: `http://jellyfin
 - **Hardware transcoding works, but H.264 only.** The HD 4000 does H.264 decode + encode in hardware via VA-API. Measured on this machine: **177 fps (7.4x realtime)** for a 1080p H.264 transcode, versus 62 fps (2.6x) on the CPU. HEVC/H.265, VP9 and AV1 have no hardware path and fall back to the CPU, which struggles above 1080p. HDR tone-mapping is not possible. Setup steps in [TODO.md](TODO.md).
 - **16 GB RAM is the ceiling.** With everything idle it sits around 2 GB used — plenty of headroom for normal use.
 - **HTTPS on `*.yourdomain.internal` is not possible** — `.internal` is a reserved private TLD, so no public CA can issue a certificate for it. Either stay on plain HTTP inside the LAN, or move your internal hostnames onto a subdomain of a domain you actually own (`jellyfin.home.example.com`) and let NPM issue certs through the Cloudflare **DNS-01** challenge. DNS-01 validates over DNS records instead of an HTTP request, so it works for names that only resolve on your LAN, with nothing exposed to the internet.
+- **Some proxy behaviour is not in the NPM UI** — see [`npm-custom/`](npm-custom/). Files under `npm/data/nginx/custom/` are included by every proxy host and shown nowhere.
 - **Runtime data is excluded** from this repo via `.gitignore`. Each service writes its own data locally on your machine (photos in Nextcloud, media library in Jellyfin, etc.). Only the recipe files are tracked here.
 
 ---
