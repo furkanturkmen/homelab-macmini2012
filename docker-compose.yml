@@ -109,7 +109,7 @@ services:
       TZ: "${TZ}"
     volumes:
       - ./nextcloud/html:/var/www/html
-      - ./nextcloud/data:/var/www/html/data
+      - /mnt/storage/documents:/var/www/html/data
 
   # =========================================================
   # MEDIA — Jellyfin + *arr pipeline
@@ -129,7 +129,7 @@ services:
     volumes:
       - ./jellyfin/config:/config
       - ./jellyfin/cache:/cache
-      - /mnt/media:/media
+      - /mnt/storage/media:/media
     environment:
       TZ: "${TZ}"
 
@@ -143,7 +143,7 @@ services:
       TZ: "${TZ}"
     volumes:
       - ./radarr/config:/config
-      - /mnt/media:/media
+      - /mnt/storage/media:/media
     ports:
       - "7878:7878"
 
@@ -157,7 +157,7 @@ services:
       TZ: "${TZ}"
     volumes:
       - ./sonarr/config:/config
-      - /mnt/media:/media
+      - /mnt/storage/media:/media
     ports:
       - "8989:8989"
 
@@ -171,7 +171,7 @@ services:
       TZ: "${TZ}"
     volumes:
       - ./bazarr/config:/config
-      - /mnt/media:/media
+      - /mnt/storage/media:/media
     ports:
       - "6767:6767"
 
@@ -257,7 +257,7 @@ services:
       WEBUI_PORT: 8083
     volumes:
       - ./qbittorrent/config:/config
-      - /mnt/media:/media
+      - /mnt/storage/media:/media
 
   flaresolverr:
     container_name: flaresolverr
@@ -355,6 +355,6 @@ services:
       - ./jellylab-push:/app:ro
       - ./jellylab-push-data:/data
       # read-only, purely so /storage can report free space on the media disk
-      - /mnt/media:/media:ro
+      - /mnt/storage/media:/media:ro
     depends_on:
       - ntfy
