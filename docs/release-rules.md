@@ -99,39 +99,50 @@ A profile demanding 720p+ for a film that only ever shipped on DVD produces a
 permanent, silent "searching" with no error anywhere. Bin Roye is a 2015 Urdu
 film: seven releases, five DVDRip, one CAM, one unparseable.
 
-Regional and pre-2010 catalogue titles need one profile that reaches all the
-way down, used for nothing else:
+18 of 22 films sit on `HD-1080p (720p fallback)`, which allowed nothing below
+720p. That profile already has `upgradeAllowed`, so it can safely reach lower —
+see R9. For the rest, one profile that also carries the Bluray rips the main
+one does not, assigned by hand:
 
 ```
-Name            Archive (last resort to 1080p)
-Allowed         CAM, DVDSCR, SDTV, DVD, DVD-R, Bluray-480p, Bluray-576p,
-                HDTV-720p, WEB 720p, Bluray-720p,
-                HDTV-1080p, WEB 1080p, Bluray-1080p
-Excluded        WORKPRINT, TELESYNC, TELECINE, REGIONAL, Unknown
+Name            Archive (DVD to 1080p)
 Cutoff          WEB 1080p
 upgradeAllowed  true
 minFormatScore  0
+Excluded        WORKPRINT, CAM, TELESYNC, TELECINE, REGIONAL, Unknown
+
+Allowed, best first - Radarr takes the highest of these that exists:
+
+  Bluray-1080p > WEB 1080p > HDTV-1080p
+    > Bluray-720p > WEB 720p > HDTV-720p
+    > Bluray-576p > Bluray-480p
+    > DVD-R > DVD > SDTV > DVDSCR      <- floor
 ```
 
-**Why a camrip is allowed here.** Radarr grabs the best allowed quality that
-exists, so the low rungs are unreachable while anything above them is on offer:
+Radarr stores its quality list **worst-first**, so a profile printed in stored
+order puts the floor at the front and reads as though the worst quality were
+preferred. It is the opposite: Radarr grabs the *highest* allowed quality that
+exists, and the low rungs are unreachable while anything above them is on offer.
+
+## R9 — A profile that upgrades may fall back
 
 ```
-1080p exists       takes 1080p, never considers CAM
-only CAM exists    takes CAM rather than searching forever
-1080p appears      upgrades, replaces the CAM
+DVDSCR, SDTV, DVD, DVD-R    enabled on any profile with upgradeAllowed
 ```
 
-The cutoff at 1080p with upgrades on is what makes it self-correcting - a
-camrip is a placeholder, not a decision.
+Only where `upgradeAllowed` is already true, and that is the entire safety
+argument: a DVD grabbed under such a profile is a **placeholder** that Radarr
+replaces the moment something better appears. On a profile that never upgrades
+the same change would make a DVDRip permanent.
 
-It is confined to this profile. An ordinary film should fail rather than fetch
-a camrip, and a camrip is a favourite malware wrapper: Bin Roye's only CAM came
-from TorrentDownload. The defence that actually covers that is R5 opening the
-torrent and looking inside, not this list.
+**No camrip, here or in R8.** A DVD only exists for a film old enough to have
+shipped on one, so it can never pre-empt a new release. A camrip appears
+exactly while a film is in cinemas — put CAM in the main profile and you grab a
+camrip of a new release on day one, which is the one moment it is worst. It is
+also a favourite malware wrapper: Bin Roye's only CAM came from TorrentDownload.
 
-TELESYNC and TELECINE are better than CAM and carry identical risk. Add them if
-the last resort should be less bad rather than merely present.
+The defence that actually covers that is R5, opening the torrent and looking
+inside — never a quality list.
 
 ## Telling the two failures apart
 

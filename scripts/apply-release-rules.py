@@ -22,30 +22,22 @@ import urllib.request
 HOST = os.environ.get('ARR_HOST', '192.168.68.59')
 ENV = os.path.expanduser('~/homelab/.env')
 
-# R8. Everything from a camrip upward, in one profile that is never the default.
+# R8. Everything from a DVD upward, including the Bluray rips the main profile
+# does not carry. For titles nothing else can satisfy, assigned by hand.
 #
-# CAM is in here deliberately. Radarr takes the best allowed quality that
-# exists, so a title with a 1080p release will never see it; a title with
-# nothing else gets something rather than searching forever. With the cutoff at
-# 1080p and upgrades on, the camrip is replaced the moment a real release
-# appears.
-#
-# It stays out of every other profile. Ordinary films should fail rather than
-# fetch a camrip, and a camrip is a favourite malware wrapper - the defence
-# that actually covers that is torrent-guard.py opening the torrent and looking
-# inside, not this list.
+# No camrip. A DVD only exists for a film old enough to have shipped on one, so
+# it can never pre-empt a new release; a camrip appears exactly while a film is
+# in cinemas, which is when grabbing one is worst. It is also a favourite
+# malware wrapper - the only defence that actually covers that is
+# torrent-guard.py opening the torrent and looking inside.
 ARCHIVE_ALLOW = {
-    'CAM',
     'DVDSCR', 'SDTV', 'DVD', 'DVD-R', 'Bluray-480p', 'Bluray-576p',
     'HDTV-720p', 'WEB 720p', 'Bluray-720p', 'WEBDL-720p', 'WEBRip-720p',
     'HDTV-1080p', 'WEB 1080p', 'Bluray-1080p', 'WEBDL-1080p', 'WEBRip-1080p',
 }
 # Named only so the doc and the code agree on what is being kept out. The code
 # denies by default, so this list is documentation rather than logic.
-#
-# TELESYNC and TELECINE are better than CAM and carry the same risk; add them
-# here if the last resort should be less bad rather than merely present.
-ARCHIVE_DENY = {'WORKPRINT', 'TELESYNC', 'TELECINE', 'REGIONAL', 'Unknown'}
+ARCHIVE_DENY = {'WORKPRINT', 'CAM', 'TELESYNC', 'TELECINE', 'REGIONAL', 'Unknown'}
 
 
 def load_keys():
@@ -155,13 +147,51 @@ def ensure_profiles(a, scores):
             a.write(f'qualityprofile/{p["id"]}', p, 'PUT')
 
 
+# R9. The rungs below 720p that an upgrading profile may fall back to.
+#
+# Deliberately no CAM. A DVD only exists for a film old enough to have shipped
+# on one, so it can never pre-empt a new release - whereas a camrip appears
+# exactly while a film is in cinemas, which is when grabbing one is worst. CAM
+# lives in the archive profile, assigned by hand.
+FALLBACK_RUNGS = ['DVDSCR', 'SDTV', 'DVD', 'DVD-R']
+
+
+def ensure_fallback_rungs(a):
+    """R9 - let a profile that upgrades reach below its floor.
+
+    Bin Roye (2015) is on a profile allowing nothing under 720p, and the only
+    releases that exist are DVDRips. It searched forever and reported progress
+    forever.
+
+    Applied only where upgradeAllowed is already true. That is the whole safety
+    argument: a DVD grabbed under such a profile is a placeholder that Radarr
+    replaces the moment something better appears. On a profile that never
+    upgrades the same change would make a DVDRip permanent.
+    """
+    for p in a.get('qualityprofile'):
+        if not p.get('upgradeAllowed'):
+            continue
+        added = []
+        for node in p['items']:
+            n = (node.get('quality') or {}).get('name') or node.get('name')
+            if n in FALLBACK_RUNGS and not node.get('allowed'):
+                node['allowed'] = True
+                added.append(n)
+        if not added:
+            a.say(f'profile "{p["name"]}": fallback rungs already allowed', False)
+            continue
+        a.say(f'profile "{p["name"]}": allow {", ".join(added)} as fallback')
+        if a.apply:
+            a.write(f'qualityprofile/{p["id"]}', p, 'PUT')
+
+
 def ensure_archive_profile(a):
-    """R8 - one profile that reaches all the way down, for titles nothing else
-    can satisfy. Radarr takes the best allowed quality that exists, so the low
-    rungs are only ever reached when there is nothing above them, and the
-    cutoff plus upgradeAllowed replaces them when there is."""
+    """R8 - one profile reaching down to DVD and across to the Bluray rips the
+    main profile does not carry. Radarr takes the best allowed quality that
+    exists, so the low rungs are only reached when nothing is above them, and
+    cutoff plus upgradeAllowed replaces them when something appears."""
     profiles = a.get('qualityprofile')
-    name = 'Archive (last resort to 1080p)'
+    name = 'Archive (DVD to 1080p)'
     if any(p['name'] == name for p in profiles):
         a.say(f'profile "{name}" exists', False)
         return
@@ -188,11 +218,16 @@ def ensure_archive_profile(a):
         n = (node.get('quality') or {}).get('name') or node.get('name')
         node['allowed'] = n in ARCHIVE_ALLOW
 
+    # Radarr stores items worst-first and grabs the *highest* allowed quality
+    # that exists, so printing them in stored order reads exactly backwards -
+    # it puts CAM at the front and looks like CAM is preferred. Reversed here,
+    # best first, with the last rung named as what it is.
     allowed = [n for n in ((x.get('quality') or {}).get('name') or x.get('name')
                            for x in p['items']) if n in ARCHIVE_ALLOW]
     if not allowed:
         a.say(f'cannot build "{name}": no quality names matched this install', False)
         return
+    preference = ' > '.join(reversed(allowed))
 
     # Cloned from a profile whose cutoff may be a quality this one forbids,
     # which Radarr rejects. Aim at 1080p web, falling back to the best allowed.
@@ -202,7 +237,10 @@ def ensure_archive_profile(a):
     cutoff = cutoff or [x for x in p['items'] if x.get('allowed')][-1]
     p['cutoff'] = cutoff.get('id') or (cutoff.get('quality') or {}).get('id')
 
-    a.say(f'create profile "{name}" allowing {allowed}')
+    a.say(f'create profile "{name}"')
+    print(f'     best first: {preference}')
+    print(f'     {allowed[0]} is the floor - only taken when nothing '
+          f'above it exists, and replaced once something does')
     if a.apply:
         new = a.write('qualityprofile', p, 'POST')
         print(f'     id={new["id"]} - assign it to regional and pre-2010 titles')
@@ -228,6 +266,7 @@ def main():
             if name == 'radarr':
                 ensure_format(a, 'Italian release', r'\b(ITA|ITALIAN)\b')
             ensure_profiles(a, {'Repack/Proper': 5, 'Italian release': -1000})
+            ensure_fallback_rungs(a)
             if name == 'radarr':
                 ensure_archive_profile(a)
         except urllib.error.HTTPError as e:
