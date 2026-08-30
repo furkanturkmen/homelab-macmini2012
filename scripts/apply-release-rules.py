@@ -185,6 +185,35 @@ def ensure_fallback_rungs(a):
             a.write(f'qualityprofile/{p["id"]}', p, 'PUT')
 
 
+def ensure_metadata(a):
+    """R10 - write an NFO next to every file, so Jellyfin never has to guess.
+
+    Radarr imported Fall (2022) correctly and Jellyseerr still reported it as
+    processing, because Jellyfin had not identified the file against TMDB yet -
+    no provider ids, no artwork - and Jellyseerr matches on TMDB id alone. The
+    film existed on disk and the request looked unfulfilled.
+
+    With no metadata provider enabled there is no .nfo, so Jellyfin has only
+    the filename to go on. That usually works and silently sometimes does not,
+    which is the worst of both.
+
+    XbmcMetadata is the one Jellyfin reads. Enabling it costs a small .nfo and
+    some artwork beside each file.
+    """
+    for m in a.get('metadata'):
+        if m.get('implementation') != 'XbmcMetadata':
+            continue
+        if m.get('enable'):
+            a.say(f'metadata "{m["name"]}" already enabled', False)
+            return
+        a.say(f'enable metadata "{m["name"]}" - writes .nfo with the TMDB id')
+        if a.apply:
+            m['enable'] = True
+            a.write(f'metadata/{m["id"]}', m, 'PUT')
+        return
+    a.say('no XbmcMetadata provider found', False)
+
+
 def ensure_archive_profile(a):
     """R8 - one profile reaching down to DVD and across to the Bluray rips the
     main profile does not carry. Radarr takes the best allowed quality that
@@ -267,6 +296,7 @@ def main():
                 ensure_format(a, 'Italian release', r'\b(ITA|ITALIAN)\b')
             ensure_profiles(a, {'Repack/Proper': 5, 'Italian release': -1000})
             ensure_fallback_rungs(a)
+            ensure_metadata(a)
             if name == 'radarr':
                 ensure_archive_profile(a)
         except urllib.error.HTTPError as e:
