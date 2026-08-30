@@ -351,6 +351,14 @@ services:
       NTFY_PASSWORD: "${NTFY_PASSWORD}"
       PUSH_REGISTER_SECRET: "${PUSH_REGISTER_SECRET}"
       DEVICES_FILE: "/data/devices.json"
+      # Read-only use of the *arr queues, so /downloads can page through the
+      # whole thing. The keys live in .env, which is gitignored - the app asks
+      # this service rather than holding a credential that can rewrite the
+      # library.
+      SONARR_URL: "http://sonarr:8989"
+      SONARR_API_KEY: "${SONARR_API_KEY}"
+      RADARR_URL: "http://radarr:7878"
+      RADARR_API_KEY: "${RADARR_API_KEY}"
     volumes:
       - ./jellylab-push:/app:ro
       - ./jellylab-push-data:/data
