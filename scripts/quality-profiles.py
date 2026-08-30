@@ -46,8 +46,15 @@ ENV = os.path.expanduser('~/homelab/.env')
 #
 # Anything absent from a given install is skipped, which is how Sonarr - with
 # no CAM, TELESYNC or TELECINE - simply ends up without those rungs.
+# Bluray-1080p is in: it is a label for the source, not a size, and the best
+# encodes come from it - Pinocchio arrived as a 1.52GiB BluRay rip.
+#
+# Remux-1080p is out. A remux is the untouched lossless stream at 20-40GB, and
+# both apps take the highest allowed quality, so one existing would beat every
+# sane encode. Nothing at that bitrate direct-plays to a phone over the mesh
+# either, which forces the transcode this server cannot do.
 T_1080 = ['HDTV-1080p', 'WEB 1080p', 'WEBDL-1080p', 'WEBRip-1080p',
-          'Bluray-1080p', 'Remux-1080p']
+          'Bluray-1080p']
 T_720 = ['HDTV-720p', 'WEB 720p', 'WEBDL-720p', 'WEBRip-720p', 'Bluray-720p']
 T_DVD = ['WEB 480p', 'WEBDL-480p', 'WEBRip-480p', 'Bluray-480p', 'Bluray-576p',
          'DVD', 'DVD-R']
