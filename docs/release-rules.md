@@ -99,22 +99,39 @@ A profile demanding 720p+ for a film that only ever shipped on DVD produces a
 permanent, silent "searching" with no error anywhere. Bin Roye is a 2015 Urdu
 film: seven releases, five DVDRip, one CAM, one unparseable.
 
-Regional and pre-2010 catalogue titles need a profile that reaches down to DVD
-and never to a camcorder rip:
+Regional and pre-2010 catalogue titles need one profile that reaches all the
+way down, used for nothing else:
 
 ```
-Name            Archive (DVD → 1080p)
-Allowed         DVDSCR, SDTV, DVD, DVD-R, Bluray-480p, Bluray-576p,
+Name            Archive (last resort to 1080p)
+Allowed         CAM, DVDSCR, SDTV, DVD, DVD-R, Bluray-480p, Bluray-576p,
                 HDTV-720p, WEB 720p, Bluray-720p,
                 HDTV-1080p, WEB 1080p, Bluray-1080p
-Excluded        WORKPRINT, CAM, TELESYNC, TELECINE, REGIONAL, Unknown
+Excluded        WORKPRINT, TELESYNC, TELECINE, REGIONAL, Unknown
 Cutoff          WEB 1080p
-upgradeAllowed  true      — takes DVD now, upgrades if 1080p ever appears
+upgradeAllowed  true
 minFormatScore  0
 ```
 
-CAM stays banned everywhere. A camrip is both bad and a favourite malware
-wrapper — Bin Roye's only CAM came from TorrentDownload.
+**Why a camrip is allowed here.** Radarr grabs the best allowed quality that
+exists, so the low rungs are unreachable while anything above them is on offer:
+
+```
+1080p exists       takes 1080p, never considers CAM
+only CAM exists    takes CAM rather than searching forever
+1080p appears      upgrades, replaces the CAM
+```
+
+The cutoff at 1080p with upgrades on is what makes it self-correcting - a
+camrip is a placeholder, not a decision.
+
+It is confined to this profile. An ordinary film should fail rather than fetch
+a camrip, and a camrip is a favourite malware wrapper: Bin Roye's only CAM came
+from TorrentDownload. The defence that actually covers that is R5 opening the
+torrent and looking inside, not this list.
+
+TELESYNC and TELECINE are better than CAM and carry identical risk. Add them if
+the last resort should be less bad rather than merely present.
 
 ## Telling the two failures apart
 

@@ -22,15 +22,30 @@ import urllib.request
 HOST = os.environ.get('ARR_HOST', '192.168.68.59')
 ENV = os.path.expanduser('~/homelab/.env')
 
-# R8. Everything from a DVD upward, and never a camcorder rip.
+# R8. Everything from a camrip upward, in one profile that is never the default.
+#
+# CAM is in here deliberately. Radarr takes the best allowed quality that
+# exists, so a title with a 1080p release will never see it; a title with
+# nothing else gets something rather than searching forever. With the cutoff at
+# 1080p and upgrades on, the camrip is replaced the moment a real release
+# appears.
+#
+# It stays out of every other profile. Ordinary films should fail rather than
+# fetch a camrip, and a camrip is a favourite malware wrapper - the defence
+# that actually covers that is torrent-guard.py opening the torrent and looking
+# inside, not this list.
 ARCHIVE_ALLOW = {
+    'CAM',
     'DVDSCR', 'SDTV', 'DVD', 'DVD-R', 'Bluray-480p', 'Bluray-576p',
     'HDTV-720p', 'WEB 720p', 'Bluray-720p', 'WEBDL-720p', 'WEBRip-720p',
     'HDTV-1080p', 'WEB 1080p', 'Bluray-1080p', 'WEBDL-1080p', 'WEBRip-1080p',
 }
 # Named only so the doc and the code agree on what is being kept out. The code
 # denies by default, so this list is documentation rather than logic.
-ARCHIVE_DENY = {'WORKPRINT', 'CAM', 'TELESYNC', 'TELECINE', 'REGIONAL', 'Unknown'}
+#
+# TELESYNC and TELECINE are better than CAM and carry the same risk; add them
+# here if the last resort should be less bad rather than merely present.
+ARCHIVE_DENY = {'WORKPRINT', 'TELESYNC', 'TELECINE', 'REGIONAL', 'Unknown'}
 
 
 def load_keys():
@@ -141,9 +156,12 @@ def ensure_profiles(a, scores):
 
 
 def ensure_archive_profile(a):
-    """R8 - a profile that reaches down to DVD but never to a camrip."""
+    """R8 - one profile that reaches all the way down, for titles nothing else
+    can satisfy. Radarr takes the best allowed quality that exists, so the low
+    rungs are only ever reached when there is nothing above them, and the
+    cutoff plus upgradeAllowed replaces them when there is."""
     profiles = a.get('qualityprofile')
-    name = 'Archive (DVD to 1080p)'
+    name = 'Archive (last resort to 1080p)'
     if any(p['name'] == name for p in profiles):
         a.say(f'profile "{name}" exists', False)
         return
