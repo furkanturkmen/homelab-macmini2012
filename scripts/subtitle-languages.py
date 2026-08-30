@@ -11,7 +11,7 @@ them embedded.
 Set the cutoff to nothing and Bazarr keeps going until it has all of them, or
 has genuinely failed to find them.
 
-Languages here are English, Dutch, Turkish and Japanese. Adding a language
+Languages here are English, Dutch and Turkish. Adding a language
 does not retroactively fetch it: existing titles need a search for wanted
 subtitles afterwards, which --search triggers.
 
@@ -28,13 +28,16 @@ HOST = '192.168.68.59'
 PORT = 6767
 CONFIG = '/config/config/config.yaml'
 
+# Japanese is deliberately absent. For anime it ships embedded in the release
+# rather than published separately - use_embedded_subs is on, so those tracks
+# are already found - and asking for it externally spent a quarter of the
+# throttle budget on searches that were never going to land.
 WANTED = [
     ('en', 'English'),
     ('nl', 'Dutch'),
     ('tr', 'Turkish'),
-    ('ja', 'Japanese'),
 ]
-PROFILE_NAME = 'English + Dutch + Turkish + Japanese'
+PROFILE_NAME = 'English + Dutch + Turkish'
 
 
 def api_key():
