@@ -273,7 +273,10 @@ async function localId(base, key, path, tmdbId) {
  */
 async function candidates(base, key, query, limit = 10) {
   const res = await fetch(`${base}/api/v3/release?${query}&apikey=${key}`, {
-    signal: AbortSignal.timeout(120000),
+    // Three minutes. A season search across eight indexers measured 110
+    // seconds, and the old two-minute ceiling turned a slow-but-working
+    // answer into a 502 just as it was about to succeed.
+    signal: AbortSignal.timeout(180000),
   });
   if (!res.ok) throw new Error(`${res.status}`);
   const all = await res.json();
