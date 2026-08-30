@@ -28,3 +28,4 @@ gluetun/*
 .DS_Store
 Thumbs.db
 desktop.ini
+__pycache__/
