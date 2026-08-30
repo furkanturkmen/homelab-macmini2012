@@ -20,6 +20,18 @@ Sonarr or Radarr asked for is never legitimate, so that case is removed
 outright. "No media file at all" is only reported, never acted on, because
 scene releases legitimately ship as split archives with no video extension in
 sight and a false positive there would delete something real.
+
+Removal goes *through* Sonarr or Radarr rather than straight to qBittorrent,
+because a kill that does not blocklist is an infinite loop. "Fall 2022 PROPER
+1080p WEBRip x265 RARBG" was grabbed, killed here, and grabbed again fifty-five
+minutes later - the identical release, because deleting the torrent left Radarr
+with no record that anything was wrong and its ranking still put that release
+first. Blocklisting is what makes a kill stick, and it also triggers a fresh
+search that will pick something else.
+
+Falls back to deleting straight from qBittorrent when no queue row matches the
+hash, which covers a torrent added by hand and an *arr that is down. That path
+does not blocklist, so it says so in the notification.
 """
 import json
 import os
@@ -45,6 +57,13 @@ MEDIA = {
 }
 # Categories the *arr apps use. Anything hand-added is left alone.
 ARR_CATEGORIES = {'tv-sonarr', 'radarr', 'movies-radarr', 'sonarr'}
+
+# Published ports on the host, not the container names the compose file uses:
+# this runs from cron on the host, where "http://sonarr:8989" does not resolve.
+ARRS = (
+    ('sonarr', 'http://127.0.0.1:8989', 'SONARR_API_KEY'),
+    ('radarr', 'http://127.0.0.1:7878', 'RADARR_API_KEY'),
+)
 
 
 def qb(path, post=None):
@@ -84,6 +103,65 @@ def notify(title, body, priority='high', tags='warning'):
         urllib.request.urlopen(req, timeout=15).read()
     except Exception as e:
         print(f'ntfy failed: {e}', file=sys.stderr)
+
+
+def arr(base, key, path, method='GET', body=None):
+    req = urllib.request.Request(
+        f'{base}/api/v3/{path}',
+        data=json.dumps(body).encode() if body is not None else None,
+        method=method,
+        headers={'X-Api-Key': key, 'Content-Type': 'application/json'},
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else None
+
+
+def remove_and_blocklist(h, dry):
+    """Remove a torrent so that it stays removed.
+
+    Deleting it from qBittorrent alone is not enough. Radarr keeps no record
+    that the release was bad, its ranking still puts that release first, and
+    the next search grabs the same file again - which is exactly what happened
+    to Fall (2022), twice, fifty-five minutes apart.
+
+    Going through the queue API instead does all three things at once: removes
+    it from the client with its data, blocklists the release so it can never be
+    chosen again, and starts a fresh search.
+
+    Sonarr queues one row per *episode*, so a season pack is many rows sharing
+    one downloadId. All of them go together, or the leftovers sit in the queue
+    pointing at a torrent that no longer exists.
+
+    Returns a sentence describing what happened, for the notification.
+    """
+    for name, base, keyvar in ARRS:
+        key = env(keyvar)
+        if not key:
+            continue
+        try:
+            queue = arr(base, key, 'queue?pageSize=500')
+            rows = [r for r in (queue or {}).get('records', [])
+                    if (r.get('downloadId') or '').lower() == h.lower()]
+            if not rows:
+                continue
+            if dry:
+                return f'would blocklist via {name} ({len(rows)} queue row(s))'
+            arr(base, key,
+                'queue/bulk?removeFromClient=true&blocklist=true&skipRedownload=false',
+                method='DELETE', body={'ids': [r['id'] for r in rows]})
+            return f'blocklisted via {name} ({len(rows)} queue row(s)), re-searching'
+        except Exception as e:
+            print(f'{name} blocklist failed: {e}', file=sys.stderr)
+
+    # Nothing in either queue: added by hand, or the *arr is down. Delete it
+    # anyway - the file is hostile either way - but be explicit that nothing
+    # was taught, because this is the case that can loop.
+    if dry:
+        return 'would delete from qBittorrent only (no queue row - NOT blocklisted)'
+    qb('/api/v2/torrents/stop', f'hashes={h}')
+    qb('/api/v2/torrents/delete', f'hashes={h}&deleteFiles=true')
+    return 'deleted from qBittorrent only - NOT blocklisted, may be re-grabbed'
 
 
 def load_seen():
@@ -138,10 +216,9 @@ def main():
                 f"progress was {t.get('progress', 0) * 100:.0f}%"
             )
             print(f'REMOVE {h} {name[:60]} -> {hostile}')
-            if not dry:
-                qb('/api/v2/torrents/stop', f'hashes={h}')
-                qb('/api/v2/torrents/delete', f'hashes={h}&deleteFiles=true')
-            removed.append(detail)
+            via = remove_and_blocklist(h, dry)
+            print(f'       {via}')
+            removed.append(f'{detail}\n{via}')
 
         elif arr and not has_media and h not in seen:
             # Reported only. Split archives are legitimate and look like this.
