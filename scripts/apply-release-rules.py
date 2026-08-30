@@ -134,7 +134,12 @@ def ensure_format(a, name, regex):
 # Upgrades are turned on with it. A profile that can only ever hold one grab is
 # a poor fit for a tier where the first acceptable release is rarely the best.
 PROFILE_OVERRIDES = {
-    'Ultra-HD': {'scores': {'HEVC (x265)': 0}, 'upgradeAllowed': True},
+    # fallback False because R9 keys off upgradeAllowed, and turning that on
+    # here would otherwise hand a 4K profile a DVD rung - request 2160p, get
+    # a DVDRip. There is no 'something rather than nothing' argument at 4K:
+    # a title with no 4K release should find nothing, not fall to SD.
+    'Ultra-HD': {'scores': {'HEVC (x265)': 0}, 'upgradeAllowed': True,
+                 'fallback': False},
 }
 
 
@@ -195,18 +200,31 @@ def ensure_fallback_rungs(a):
     upgrades the same change would make a DVDRip permanent.
     """
     for p in a.get('qualityprofile'):
-        if not p.get('upgradeAllowed'):
-            continue
-        added = []
+        # Three states, not two. Adding where upgrades are on, removing only
+        # where an override explicitly forbids it, and leaving everything else
+        # exactly as configured - "Any" and "SD" allow DVD because that is what
+        # they are for, and inferring a removal from `not wanted` would strip
+        # them.
+        over = PROFILE_OVERRIDES.get(p['name'], {})
+        forbidden = over.get('fallback') is False
+        wanted = bool(p.get('upgradeAllowed')) and not forbidden
+
+        changed = []
         for node in p['items']:
             n = (node.get('quality') or {}).get('name') or node.get('name')
-            if n in FALLBACK_RUNGS and not node.get('allowed'):
+            if n not in FALLBACK_RUNGS:
+                continue
+            if wanted and not node.get('allowed'):
                 node['allowed'] = True
-                added.append(n)
-        if not added:
-            a.say(f'profile "{p["name"]}": fallback rungs already allowed', False)
+                changed.append(n)
+            elif forbidden and node.get('allowed'):
+                node['allowed'] = False
+                changed.append(n)
+
+        if not changed:
             continue
-        a.say(f'profile "{p["name"]}": allow {", ".join(added)} as fallback')
+        verb = 'allow' if wanted else 'remove'
+        a.say(f'profile "{p["name"]}": {verb} {", ".join(changed)} as fallback')
         if a.apply:
             a.write(f'qualityprofile/{p["id"]}', p, 'PUT')
 
