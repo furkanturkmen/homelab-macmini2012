@@ -613,6 +613,74 @@ async function candidates(base, key, query, limit = 10) {
   };
 }
 
+/**
+ * Stop, or resume, looking for a title.
+ *
+ * The only write this service does, and deliberately the smallest one that
+ * makes rejecting mean anything. Declining a request in Jellyseerr closes the
+ * record and nothing else: Sonarr kept all ten episodes of a show with no
+ * releases anywhere monitored, and went on querying eight indexers for it
+ * every thirty minutes, forever. The red pill said stopped and nothing had.
+ *
+ * It sets `monitored` and touches nothing else. It cannot grab, delete, blocklist
+ * or move a file, and every effect it has is undone by calling it again with
+ * the opposite value - which is what un-rejecting does.
+ *
+ * For television the season is what matters. A request is filed per season, so
+ * unmonitoring the whole series would stop searches for seasons nobody
+ * rejected; the episodes go with their season because Sonarr searches those
+ * individually.
+ */
+async function setMonitored({ tmdbId, type, monitored, season }) {
+  const tv = type === 'tv';
+  const key = tv ? SONARR_API_KEY : RADARR_API_KEY;
+  const base = tv ? SONARR_URL : RADARR_URL;
+  if (!key) throw new Error(`${tv ? 'sonarr' : 'radarr'} not configured`);
+
+  const found = await localId(base, key, tv ? 'series' : 'movie', tmdbId);
+  if (!found) return { changed: false, reason: 'not tracked' };
+
+  const get = async (path) => {
+    const res = await fetch(`${base}/api/v3/${path}?apikey=${key}`,
+      { signal: AbortSignal.timeout(20000) });
+    if (!res.ok) throw new Error(`${res.status}`);
+    return res.json();
+  };
+  const put = async (path, body) => {
+    const res = await fetch(`${base}/api/v3/${path}?apikey=${key}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) throw new Error(`${res.status}`);
+  };
+
+  if (!tv) {
+    const movie = await get(`movie/${found.id}`);
+    if (movie.monitored === monitored) return { changed: false, reason: 'already' };
+    movie.monitored = monitored;
+    await put(`movie/${found.id}`, movie);
+    return { changed: true, title: found.title };
+  }
+
+  const series = await get(`series/${found.id}`);
+  let touched = 0;
+  for (const se of series.seasons ?? []) {
+    if (season != null && se.seasonNumber !== Number(season)) continue;
+    if (se.monitored === monitored) continue;
+    se.monitored = monitored;
+    touched += 1;
+  }
+  if (touched) await put(`series/${found.id}`, series);
+
+  // No separate pass over the episodes: Sonarr cascades a season's monitored
+  // flag down to them. Verified - unmonitoring season 15 took all ten episodes
+  // with it and dropped the wanted list from 124 to 114.
+
+  return { changed: touched > 0, title: found.title, touched };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
 
@@ -733,6 +801,49 @@ const server = createServer(async (req, res) => {
       }
       const out = await candidates(svc, key, query);
       return send(res, 200, { tracked: true, title: found.title, ...out });
+    } catch (err) {
+      return send(res, 502, { error: err.message });
+    }
+  }
+
+  /**
+   * The one write. POST /monitor {tmdbId, type, monitored, season?}
+   *
+   * Unauthenticated like the rest of this service, which is a deliberate
+   * choice worth naming: it is reachable only from the LAN or the mesh, and
+   * the worst it can do is stop or resume a search - no file is touched, and
+   * every call is reversed by the opposite call. The *arr API keys stay here.
+   */
+  if (url.pathname === '/monitor' && req.method === 'POST') {
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+      // Nothing legitimate is large; refuse rather than buffer.
+      if (body.length > 4096) return send(res, 413, { error: 'too large' });
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(body || '{}');
+    } catch {
+      return send(res, 400, { error: 'invalid json' });
+    }
+
+    const { tmdbId, type, monitored, season } = parsed;
+    if (!tmdbId) return send(res, 400, { error: 'tmdbId required' });
+    if (typeof monitored !== 'boolean') return send(res, 400, { error: 'monitored must be a boolean' });
+
+    try {
+      const out = await setMonitored({
+        tmdbId,
+        type: type === 'tv' ? 'tv' : 'movie',
+        monitored,
+        season,
+      });
+      log(`monitor ${type}:${tmdbId}${season != null ? ` S${season}` : ''} -> ${monitored}`
+        + ` (${out.changed ? `changed${out.touched ? `, ${out.touched} item(s)` : ''}` : out.reason})`);
+      // A verdict for a title nobody is looking for any more is meaningless.
+      VERDICTS.delete(`${type === 'tv' ? 'tv' : 'movie'}:${tmdbId}`);
+      return send(res, 200, out);
     } catch (err) {
       return send(res, 502, { error: err.message });
     }
