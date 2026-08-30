@@ -119,6 +119,20 @@ function byTmdbId(records, pick) {
       status: r.trackedDownloadState ?? r.status ?? null,
       stalled: /stalled|no connections/i.test(r.errorMessage ?? ''),
       title: r.title ?? null,
+      /*
+       * Enough to answer "how is it going" without a second service.
+       *
+       * qBittorrent has the live speed and the seed count, but reading it
+       * would mean either a password in another place or opening its web UI to
+       * every container on the docker network. Average speed is derivable from
+       * what is already here - bytes done over time elapsed - and that is the
+       * number worth knowing anyway: a torrent that has averaged 2MB/s over
+       * ten hours is a different situation from one that briefly touched 20.
+       */
+      added: r.added ?? null,
+      timeLeft: r.timeleft ?? null,
+      indexer: r.indexer ?? null,
+      client: r.downloadClient ?? null,
     };
   }
   return out;
