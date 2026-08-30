@@ -169,6 +169,53 @@ async function unreleasedMovies(base, key) {
   return out;
 }
 
+/**
+ * The seasons Sonarr is still waiting on.
+ *
+ * The television half of the same problem as unreleasedMovies. A request for a
+ * season currently airing sits at "Processing" week after week and reads as a
+ * search finding nothing, when eight episodes simply do not exist yet.
+ *
+ * Sonarr counts them per season: episodeCount is how many have aired,
+ * totalEpisodeCount how many there will be, and nextAiring when the following
+ * one is due. Only seasons with something still to come are returned - a
+ * finished series has nothing to say here.
+ */
+async function airingSeries(base, key) {
+  const res = await fetch(`${base}/api/v3/series?apikey=${key}`, {
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const out = {};
+  for (const show of await res.json()) {
+    if (!show.tmdbId) continue;
+    const seasons = {};
+    for (const season of show.seasons ?? []) {
+      // Season 0 is specials, which air on no schedule and are not what
+      // anyone means by "has it aired yet".
+      if (season.seasonNumber === 0) continue;
+      const st = season.statistics ?? {};
+      /*
+       * nextAiring is the only unambiguous field here. episodeCount counts
+       * *monitored* episodes, so a season nobody asked for reads as zero of
+       * twenty-three and looks unaired - The Mentalist's later seasons finished
+       * in 2012 and reported exactly that. A nextAiring date means there is
+       * genuinely more to come; its absence means there is not.
+       */
+      if (!st.nextAiring) continue;
+      seasons[season.seasonNumber] = {
+        aired: st.episodeCount ?? 0,
+        total: st.totalEpisodeCount ?? 0,
+        nextAiring: st.nextAiring,
+      };
+    }
+    if (Object.keys(seasons).length > 0) {
+      out[show.tmdbId] = { status: show.status ?? null, seasons };
+    }
+  }
+  return out;
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
 
@@ -209,7 +256,7 @@ const server = createServer(async (req, res) => {
    */
   if (url.pathname === '/downloads') {
     const errors = {};
-    const [tv, movies, unreleased] = await Promise.all([
+    const [tv, movies, unreleased, airing] = await Promise.all([
       SONARR_API_KEY
         ? wholeQueue(SONARR_URL, SONARR_API_KEY, 'includeSeries=true')
             .then(r => byTmdbId(r, x => x.series))
@@ -224,11 +271,16 @@ const server = createServer(async (req, res) => {
         ? unreleasedMovies(RADARR_URL, RADARR_API_KEY)
             .catch(e => { errors.radarrMovies = e.message; return {}; })
         : Promise.resolve({}),
+      SONARR_API_KEY
+        ? airingSeries(SONARR_URL, SONARR_API_KEY)
+            .catch(e => { errors.sonarrSeries = e.message; return {}; })
+        : Promise.resolve({}),
     ]);
     return send(res, 200, {
       tv,
       movies,
       unreleased,
+      airing,
       ...(Object.keys(errors).length ? { errors } : {}),
     });
   }
