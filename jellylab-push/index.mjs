@@ -2,7 +2,7 @@
  * jellylab-push — answers the questions about the homelab that the Jellylab
  * app needs and Jellyfin cannot.
  *
- * Two questions so far.
+ * Three questions so far.
  *
  * How much room is left on the media drive: Jellyfin has no API for it — it
  * reports what is in the library, never what is left to put there — and this
@@ -14,6 +14,11 @@
  * 23-episode season pack fills the page on its own and everything behind it
  * looks idle - including, absurdly, whichever download is actually moving while
  * a stalled one sits at the top. This reads the whole queue.
+ *
+ * And what is not being looked for at all. A film still in cinemas sits at
+ * "Processing" indefinitely and reads as a search finding nothing, when Radarr
+ * has simply not started one and should not: isAvailable is false until the
+ * film reaches its minimumAvailability.
  *
  * It used to also bridge ntfy to Expo Push, so notifications would arrive
  * inside the app rather than in ntfy's own app. That is gone. Native iOS push
@@ -119,6 +124,37 @@ function byTmdbId(records, pick) {
   return out;
 }
 
+/**
+ * The films Radarr is deliberately not looking for yet.
+ *
+ * A request for something still in cinemas sits at "Processing" forever and
+ * reads as a search finding nothing - when in fact no search is running and
+ * none should be. Radarr knows: isAvailable stays false until the film reaches
+ * whatever minimumAvailability was set to, and digitalRelease is the date that
+ * will happen, when anyone has announced one.
+ *
+ * Only the unavailable ones are returned. The library is hundreds of films and
+ * the app only needs the handful that are waiting on the world.
+ */
+async function unreleasedMovies(base, key) {
+  const res = await fetch(`${base}/api/v3/movie?apikey=${key}`, {
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const out = {};
+  for (const m of await res.json()) {
+    if (m.isAvailable || m.hasFile || !m.tmdbId) continue;
+    out[m.tmdbId] = {
+      // announced | inCinemas | released | deleted
+      status: m.status ?? null,
+      inCinemas: m.inCinemas ?? null,
+      digitalRelease: m.digitalRelease ?? null,
+      physicalRelease: m.physicalRelease ?? null,
+    };
+  }
+  return out;
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
 
@@ -159,7 +195,7 @@ const server = createServer(async (req, res) => {
    */
   if (url.pathname === '/downloads') {
     const errors = {};
-    const [tv, movies] = await Promise.all([
+    const [tv, movies, unreleased] = await Promise.all([
       SONARR_API_KEY
         ? wholeQueue(SONARR_URL, SONARR_API_KEY, 'includeSeries=true')
             .then(r => byTmdbId(r, x => x.series))
@@ -170,10 +206,15 @@ const server = createServer(async (req, res) => {
             .then(r => byTmdbId(r, x => x.movie))
             .catch(e => { errors.radarr = e.message; return {}; })
         : Promise.resolve({}),
+      RADARR_API_KEY
+        ? unreleasedMovies(RADARR_URL, RADARR_API_KEY)
+            .catch(e => { errors.radarrMovies = e.message; return {}; })
+        : Promise.resolve({}),
     ]);
     return send(res, 200, {
       tv,
       movies,
+      unreleased,
       ...(Object.keys(errors).length ? { errors } : {}),
     });
   }
