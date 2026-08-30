@@ -359,6 +359,16 @@ services:
       SONARR_API_KEY: "${SONARR_API_KEY}"
       RADARR_URL: "http://radarr:7878"
       RADARR_API_KEY: "${RADARR_API_KEY}"
+      # Sonarr and Radarr refresh their queues from qBittorrent once a minute,
+      # so anything derived from them is up to a minute stale - over a gigabyte
+      # at 20MB/s. Reading the client directly gives live progress and speed,
+      # and is the only place a seed count exists at all.
+      #
+      # Optional: with no password set, /downloads answers exactly as before.
+      # Read-only use of the torrent list; this never adds or removes a torrent.
+      QBIT_URL: "http://gluetun:8083"
+      QBIT_USER: "${QBIT_USER}"
+      QBIT_PASSWORD: "${QBIT_PASSWORD}"
     volumes:
       - ./jellylab-push:/app:ro
       - ./jellylab-push-data:/data
