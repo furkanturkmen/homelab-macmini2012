@@ -11,6 +11,7 @@ Both failures below looked identical from the app — a request that said
 | accepted | 34 | **0** |
 | what happened | grabbed a `PROPER` that was an `.exe`, twice | nothing was ever grabbable |
 | cause | ranking put revision above score | profile forbids the only quality that exists |
+| fixed by | R0, R1 | R8, R9 |
 
 ## R0 — Score must be allowed to decide
 
@@ -93,56 +94,113 @@ search for Fall returned two Italian releases at +15 sitting second and third.
 
 Any rule worth having belongs in both, or the gap becomes the hole.
 
-## R8 — Match the quality floor to what was actually released
+## R8 — Five profiles, named for the lowest they accept
 
 A profile demanding 720p+ for a film that only ever shipped on DVD produces a
 permanent, silent "searching" with no error anywhere. Bin Roye is a 2015 Urdu
 film: seven releases, five DVDRip, one CAM, one unparseable.
 
-18 of 22 films sit on `HD-1080p (720p fallback)`, which allowed nothing below
-720p. That profile already has `upgradeAllowed`, so it can safely reach lower —
-see R9. For the rest, one profile that also carries the Bluray rips the main
-one does not, assigned by hand:
+Both apps shipped six or seven stock profiles, of which the library used two.
+Harmless noise until the app grew a quality picker — at which point every one
+became something choosable by mistake, and several were traps.
 
 ```
-Name            Archive (DVD to 1080p)
-Cutoff          WEB 1080p
-upgradeAllowed  true
-minFormatScore  0
-Excluded        WORKPRINT, CAM, TELESYNC, TELECINE, REGIONAL, Unknown
-
-Allowed, best first - Radarr takes the highest of these that exists:
-
-  Bluray-1080p > WEB 1080p > HDTV-1080p
-    > Bluray-720p > WEB 720p > HDTV-720p
-    > Bluray-576p > Bluray-480p
-    > DVD-R > DVD > SDTV > DVDSCR      <- floor
+HD 1080p   1080p only
+HD         720p and up          the default, and where 32 titles live
+DVD        DVD and up
+SD         SDTV and up
+CAM        anything, last resort
 ```
 
-Radarr stores its quality list **worst-first**, so a profile printed in stored
-order puts the floor at the front and reads as though the worst quality were
-preferred. It is the opposite: Radarr grabs the *highest* allowed quality that
-exists, and the low rungs are unreachable while anything above them is on offer.
+**A floor, never a ceiling.** Both apps always grab the best release a profile
+permits, so "CAM" still fetches 1080p when it exists and merely declines to
+refuse a camrip when nothing else is there. All five top out at 1080p and
+upgrade toward it, so a low pick is a placeholder, not a commitment.
+
+Defined by quality **name**, not by a slice of each app's own ordering, because
+they disagree: Sonarr ranks `Bluray-720p` and `WEB 720p` *above* `HDTV-1080p`,
+a fair opinion about which looks better and a poor basis for a menu item called
+"HD 1080p". Sonarr has no CAM, TELESYNC or TELECINE at all, so its CAM would
+duplicate its SD and is skipped — television gets four.
+
+`scripts/quality-profiles.py` owns this, and owns which title uses which
+profile. `apply-release-rules.py` owns scoring only. **They must not both own
+membership** — when they did, one re-added DVD rungs to "HD 1080p" and
+recreated a profile the other had just pruned.
 
 ## R9 — A profile that upgrades may fall back
 
-```
-DVDSCR, SDTV, DVD, DVD-R    enabled on any profile with upgradeAllowed
-```
+`DVDSCR, SDTV, DVD, DVD-R` on any profile with `upgradeAllowed`, which is the
+entire safety argument: a DVD grabbed under such a profile is a **placeholder**
+Radarr replaces the moment something better appears. On a profile that never
+upgrades the same change would make a DVDRip permanent.
 
-Only where `upgradeAllowed` is already true, and that is the entire safety
-argument: a DVD grabbed under such a profile is a **placeholder** that Radarr
-replaces the moment something better appears. On a profile that never upgrades
-the same change would make a DVDRip permanent.
+## R10 — Write an NFO, so Jellyfin never has to guess
 
-**No camrip, here or in R8.** A DVD only exists for a film old enough to have
-shipped on one, so it can never pre-empt a new release. A camrip appears
-exactly while a film is in cinemas — put CAM in the main profile and you grab a
-camrip of a new release on day one, which is the one moment it is worst. It is
-also a favourite malware wrapper: Bin Roye's only CAM came from TorrentDownload.
+Radarr imported Fall (2022) correctly and Jellyseerr still showed the request
+as processing. Jellyfin had the file but had not identified it against TMDB —
+no provider ids, no artwork — and **Jellyseerr matches on TMDB id alone**, so a
+film sitting on disk looked like a request that had never been fulfilled.
 
-The defence that actually covers that is R5, opening the torrent and looking
-inside — never a quality list.
+Every metadata provider was disabled, leaving Jellyfin only the filename to go
+on. That usually works and silently sometimes does not, which is the worst of
+both. `XbmcMetadata` on in both apps: one small `.nfo` carrying
+`<uniqueid type="tmdb">`, and the guessing stops.
+
+## R11 — No 4K, and no remuxes
+
+**4K cannot be scoped per user.** Jellyfin serves one file per title to
+everyone, so a 4K copy becomes *everyone's* copy. Giving one person 4K and
+another 1080p means a second Radarr with its own root folder and a second
+Jellyfin library — see below. This server also has no HEVC hardware decoder
+(i7-3615QM, HD 4000; Intel added it in Skylake), so anything that fails to
+direct-play falls to software decoding on a 2012 CPU.
+
+**Remux is out for the same practical reason.** A remux is the untouched
+lossless stream at 20–40GB, and both apps take the highest allowed quality, so
+one existing would beat every sane encode. Nothing at that bitrate direct-plays
+to a phone over the mesh.
+
+`Bluray-1080p` stays: it labels the *source*, not the size, and the best
+encodes come from it — Pinocchio: Unstrung arrived as a 1.52GiB BluRay rip.
+
+## Traps, all found the hard way
+
+- **Deleting a profile orphans Jellyseerr.** It stores its default as a bare
+  id; delete that profile and the id simply dangles. Nothing logs it, and the
+  next request lands wherever Radarr falls back to. `quality-profiles.py`
+  repairs it after a prune.
+- **Radarr collections pin a profile too.** One per TMDB collection, each with
+  its own `qualityProfileId`. That is how `QualityProfile [4] is in use`
+  appears with no movie on it.
+- **Radarr stores qualities worst-first.** Printing a profile in stored order
+  puts the floor at the front and reads exactly backwards.
+- **RSS sync only carries newly published releases.** A back-catalogue title is
+  never searched for at all and sits reporting "searching" forever — there is
+  no search-for-missing task. `scripts/search-missing.py` covers it; television
+  is opt-in behind `--tv`, because the library has 256 missing episodes and
+  firing them at once is a grab storm.
+- **Dry-run everything.** Three separate bugs in these scripts were caught
+  before touching the server: an override leaking between profiles, a removal
+  that would have stripped DVD from `Any` and `SD`, and a 4K profile being
+  handed DVD rungs.
+
+## Two qualities of the same title
+
+Not possible as configured, and that is the same mechanism that guarantees no
+duplicates: one movie is one Radarr record, one profile, one file, and an
+upgrade **replaces** rather than adds.
+
+The supported way is a second Radarr instance with its own root folder,
+registered in Jellyseerr as an `is4k` server, plus a second Jellyfin library —
+which is exactly why Jellyseerr has a separate "Request 4K" flow and per-user
+`REQUEST_4K` permissions. It produces two entries for one title by design; that
+is not a side effect to configure away.
+
+Deferred, deliberately. What covers most of the want instead is changing a
+title's profile when something different is actually needed — Bin Roye moved
+from `HD` to `CAM` and went looking for lower-quality releases with no second
+entry appearing.
 
 ## Telling the two failures apart
 
