@@ -182,6 +182,10 @@ function byTmdbId(records, pick, live = {}) {
             seedersTotal: live[hash].seedersTotal,
             peers: live[hash].peers,
             clientState: live[hash].state,
+            // Seconds. qBittorrent uses 8640000 - a hundred days - to mean it
+            // has no idea, which the app treats as no answer rather than as a
+            // very long wait.
+            eta: live[hash].eta,
           }
         : {}),
     };
