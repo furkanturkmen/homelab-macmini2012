@@ -221,27 +221,78 @@ def migrate(a):
             a.call(f'{endpoint}/{item["id"]}', item, 'PUT')
 
 
-def report_unused(a, keep):
+# Kept whatever happens. Its titles were left in place by choice, and it is
+# not this script's business to move them.
+PROTECTED = {'Any'}
+
+
+def migrate_collections(a):
+    """Repoint Radarr collections, which also pin a quality profile.
+
+    Radarr creates a collection for every film that belongs to a TMDB one, and
+    each carries its own qualityProfileId. They are all unmonitored here and do
+    nothing - but a profile a collection points at cannot be deleted, which is
+    how "QualityProfile [4] is in use" appears with no movie on it.
+    """
+    if a.name != 'radarr':
+        return
+    profiles = {p['name']: p['id'] for p in a.call('qualityprofile')}
+    by_id = {v: k for k, v in profiles.items()}
+
+    for c in a.call('collection'):
+        old = by_id.get(c.get('qualityProfileId'))
+        target = MIGRATIONS.get(old)
+        if not target or target not in profiles:
+            continue
+        a.say(f'collection {c.get("title", "?")[:30]}: "{old}" -> "{target}"')
+        if a.apply:
+            c['qualityProfileId'] = profiles[target]
+            a.call(f'collection/{c["id"]}', c, 'PUT')
+
+
+def report_unused(a, keep, prune=False):
     """What is left over, and whether anything still points at it.
 
-    Never deleted here. A profile with titles on it cannot go without moving
-    them first, and that is a decision rather than a cleanup.
+    Deletes only with --prune, and only a profile nothing points at. A profile
+    with titles on it is a decision rather than a cleanup, so it is reported
+    and left exactly where it is.
     """
     endpoint = 'movie' if a.name == 'radarr' else 'series'
     used = {}
     for item in a.call(endpoint):
         used[item['qualityProfileId']] = used.get(item['qualityProfileId'], 0) + 1
     for p in a.call('qualityprofile'):
-        if p['name'] in keep:
+        if p['name'] in keep or p['name'] in PROTECTED:
             continue
         n = used.get(p['id'], 0)
-        print(f'     leftover: "{p["name"]}" id={p["id"]} used by {n}'
-              + ('  <- safe to delete' if n == 0 else '  <- move these first'))
+        if n:
+            print(f'     leftover: "{p["name"]}" id={p["id"]} used by {n}'
+                  '  <- move these first, not deleted')
+            continue
+        if not prune:
+            print(f'     leftover: "{p["name"]}" id={p["id"]} unused'
+                  '  <- pass --prune to delete')
+            continue
+        a.say(f'delete unused profile "{p["name"]}"')
+        if not a.apply:
+            continue
+        try:
+            a.call(f'qualityprofile/{p["id"]}', method='DELETE')
+        except urllib.error.HTTPError as e:
+            # Something outside the movie list still points at it - a
+            # collection, usually. Reported and stepped over, because one
+            # blocked profile aborting the loop leaves the rest behind.
+            detail = e.read().decode()
+            msg = 'in use' if 'in use' in detail else f'{e.code}'
+            print(f'        kept: "{p["name"]}" could not be deleted ({msg})')
+            a.changed -= 1
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true')
+    ap.add_argument('--prune', action='store_true',
+                    help='delete leftover profiles nothing points at')
     args = ap.parse_args()
 
     keys = load_keys()
@@ -257,7 +308,8 @@ def main():
         try:
             sync(a)
             migrate(a)
-            report_unused(a, keep)
+            migrate_collections(a)
+            report_unused(a, keep, args.prune)
         except urllib.error.HTTPError as e:
             print(f'  !! {e.code}: {e.read().decode()[:200]}')
         total += a.changed
