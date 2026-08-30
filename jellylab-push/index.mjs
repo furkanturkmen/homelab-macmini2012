@@ -56,6 +56,11 @@ const {
   QBIT_URL = 'http://gluetun:8083',
   QBIT_USER = '',
   QBIT_PASSWORD = '',
+  // Prowlarr records every query it ran and how many results came back, which
+  // is the difference between "still looking" and "looked, found nothing".
+  // Optional, like qBittorrent.
+  PROWLARR_URL = 'http://prowlarr:9696',
+  PROWLARR_API_KEY = '',
 } = process.env;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -341,6 +346,158 @@ async function qbitLive() {
 }
 
 /**
+ * What a real search says about the titles that have not arrived.
+ *
+ * The app was counting days: "looking for it - 15d". That claims a search is
+ * ongoing when what actually happens is the same query returning the same
+ * nothing on a schedule.
+ *
+ * Prowlarr's history looked like the cheap answer and is not. It records how
+ * many results an indexer returned, not how many were usable, so Khatron Ke
+ * Khiladi reads as twenty results when every one is a different season and
+ * Sonarr accepted none. Only the *arr acceptance check knows the difference,
+ * and that is a live sweep across every indexer.
+ *
+ * So it is run here, slowly, in the background: one title a minute, oldest
+ * answer first. Fifteen unfulfilled titles are covered in fifteen minutes, the
+ * app reads a cached answer instantly, and nothing is searched on a poll.
+ */
+const VERDICTS = new Map();
+let sweeping = false;
+
+/** Monitored, still missing, and therefore worth asking about. */
+async function unfulfilled() {
+  const out = [];
+  if (RADARR_API_KEY) {
+    const res = await fetch(`${RADARR_URL}/api/v3/movie?apikey=${RADARR_API_KEY}`,
+      { signal: AbortSignal.timeout(20000) });
+    if (res.ok) {
+      for (const m of await res.json()) {
+        // isAvailable false means Radarr is deliberately not searching yet -
+        // a film still in cinemas has nothing to find and nothing to report.
+        if (m.monitored && !m.hasFile && m.tmdbId && m.isAvailable) {
+          out.push({ tmdbId: m.tmdbId, type: 'movie', id: m.id });
+        }
+      }
+    }
+  }
+  if (SONARR_API_KEY) {
+    const res = await fetch(`${SONARR_URL}/api/v3/series?apikey=${SONARR_API_KEY}`,
+      { signal: AbortSignal.timeout(20000) });
+    if (res.ok) {
+      for (const x of await res.json()) {
+        const st = x.statistics ?? {};
+        if (!x.monitored || !x.tmdbId) continue;
+        if ((st.episodeFileCount ?? 0) >= (st.episodeCount ?? 0)) continue;
+        // The lowest monitored season still missing something is the one the
+        // request is about.
+        const season = (x.seasons ?? [])
+          .filter(se => se.monitored && (se.statistics?.percentOfEpisodes ?? 100) < 100)
+          .map(se => se.seasonNumber)
+          .sort((a, b) => a - b)[0];
+        if (season != null) out.push({ tmdbId: x.tmdbId, type: 'tv', id: x.id, season });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Refresh one title's verdict - the one whose answer is oldest.
+ *
+ * One at a time on purpose. A sweep across eight indexers is seconds of work
+ * for them, and doing fifteen at once is a burst that looks like abuse and
+ * earns a rate limit.
+ */
+async function sweepOne() {
+  if (sweeping) return;
+  sweeping = true;
+  try {
+    let titles = await unfulfilled();
+
+    /*
+     * Skip anything already in a queue.
+     *
+     * "Is there anything to grab" is a question about a title nothing is
+     * fetching. Asking it mid-download wastes a sweep across every indexer to
+     * be told, correctly, that the release in the queue already meets the
+     * cutoff - and produces a verdict that reads like a dead end.
+     */
+    const downloading = new Set([
+      ...Object.keys(await wholeQueue(SONARR_URL, SONARR_API_KEY, 'includeSeries=true')
+        .then(r => byTmdbId(r, x => x.series)).catch(() => ({}))),
+      ...Object.keys(await wholeQueue(RADARR_URL, RADARR_API_KEY, 'includeMovie=true')
+        .then(r => byTmdbId(r, x => x.movie)).catch(() => ({}))),
+    ]);
+    titles = titles.filter(t => !downloading.has(String(t.tmdbId)));
+
+    const live = new Set(titles.map(t => `${t.type}:${t.tmdbId}`));
+    for (const key of VERDICTS.keys()) {
+      if (!live.has(key)) VERDICTS.delete(key);  // arrived, or was removed
+    }
+    if (titles.length === 0) return;
+
+    const stalest = titles
+      .map(t => ({ t, at: VERDICTS.get(`${t.type}:${t.tmdbId}`)?.at ?? 0 }))
+      .sort((a, b) => a.at - b.at)[0].t;
+
+    const tv = stalest.type === 'tv';
+    const key = tv ? SONARR_API_KEY : RADARR_API_KEY;
+    const svc = tv ? SONARR_URL : RADARR_URL;
+    let query;
+    if (tv) {
+      const episodeId = await episodeToSearch(svc, key, stalest.id, stalest.season);
+      if (episodeId == null) return;
+      query = `episodeId=${episodeId}`;
+    } else {
+      query = `movieId=${stalest.id}`;
+    }
+
+    const out = await candidates(svc, key, query, 1);
+    /*
+     * The whole rejection set, not one key of it.
+     *
+     * Collapsing to `Object.keys(rejections)[0]` picked whatever was inserted
+     * first, which for No Game No Life was "Unknown Series" - rejections about
+     * entirely different shows - while the answer that mattered, "release in
+     * queue already meets cutoff", sat below it. A download 37% complete and
+     * moving was cached as a dead end.
+     *
+     * The app already knows how to read this: lib/candidates.ts ranks noise
+     * last and lets "we already have it" win outright. Sending the counts lets
+     * the same tested function interpret a swept answer and a live one, rather
+     * than this file growing a second opinion.
+     */
+    VERDICTS.set(`${stalest.type}:${stalest.tmdbId}`, {
+      at: Date.now(),
+      found: out.found,
+      accepted: out.accepted,
+      rejections: out.rejections,
+    });
+    log(`swept ${stalest.type}:${stalest.tmdbId} found=${out.found} accepted=${out.accepted}`);
+  } catch (err) {
+    log(`sweep failed: ${err.message}`);
+  } finally {
+    sweeping = false;
+  }
+}
+
+/** Keyed by TMDB id, for the app to read without waiting on anything. */
+function verdicts() {
+  const out = {};
+  for (const [key, v] of VERDICTS) {
+    const tmdbId = key.split(':')[1];
+    out[tmdbId] = {
+      found: v.found,
+      accepted: v.accepted,
+      rejections: v.rejections,
+      at: v.at,
+    };
+  }
+  return out;
+}
+
+/**
  * Resolve a TMDB id to the id Radarr or Sonarr uses internally.
  *
  * The app only ever knows a TMDB id, because that is what Jellyseerr keys a
@@ -524,6 +681,9 @@ const server = createServer(async (req, res) => {
       movies,
       unreleased,
       airing,
+      // Cached answers from the background sweep - never computed on this
+      // request, which is polled every few seconds.
+      verdicts: verdicts(),
       ...(Object.keys(errors).length ? { errors } : {}),
     });
   }
@@ -582,3 +742,13 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(Number(PUSH_PORT), () => log(`listening on :${PUSH_PORT}`));
+
+/*
+ * One title a minute, forever.
+ *
+ * Deliberately unhurried: the answers change on the timescale of the release
+ * scene, not of a screen refresh, and a burst of sweeps across every indexer
+ * is what a rate limit is for. unref so this never holds the process open.
+ */
+setInterval(sweepOne, 60000).unref();
+setTimeout(sweepOne, 10000).unref();

@@ -369,6 +369,11 @@ services:
       QBIT_URL: "http://gluetun:8083"
       QBIT_USER: "${QBIT_USER}"
       QBIT_PASSWORD: "${QBIT_PASSWORD}"
+      # Prowlarr records every query and its result count, which is how the app
+      # tells "still looking" apart from "looked everywhere, found nothing".
+      # Read-only; this never runs a search of its own.
+      PROWLARR_URL: "http://prowlarr:9696"
+      PROWLARR_API_KEY: "${PROWLARR_API_KEY}"
     volumes:
       - ./jellylab-push:/app:ro
       - ./jellylab-push-data:/data
