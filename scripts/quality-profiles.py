@@ -78,10 +78,11 @@ CUTOFF = 'WEB 1080p'
 
 # Where the titles on the old stock profiles should land.
 #
-# "Any" is deliberately absent: it stays, by request. Note it allows everything
-# up to BR-DISK and Remux-2160p in Radarr, so a *new* movie placed on it can
-# grab an 80GB disc image this server cannot transcode. Everything on it today
-# is already 1080p.
+# "Any" goes too. It allowed everything from WORKPRINT up to BR-DISK and
+# Remux-2160p, so a new movie placed on it would grab an 80GB disc image this
+# server cannot transcode - it had simply never bitten, because all seven
+# titles on it already had 1080p files. They move to HD, which allows every
+# quality they actually hold.
 # Mapped to the nearest equivalent, never to something stricter. The old
 # Radarr default is literally named "720p fallback" and the Sonarr one allows
 # 720p too, so both become "HD" - moving them to "HD 1080p" would quietly make
@@ -95,6 +96,7 @@ DEFAULT_PROFILE = 'HD'
 MIGRATIONS = {
     'HD-1080p (720p fallback)': DEFAULT_PROFILE,
     'HD-1080p': DEFAULT_PROFILE,
+    'Any': DEFAULT_PROFILE,
     'Archive (DVD to 1080p)': 'CAM',
 }
 
@@ -231,9 +233,9 @@ def migrate(a):
             a.call(f'{endpoint}/{item["id"]}', item, 'PUT')
 
 
-# Kept whatever happens. Its titles were left in place by choice, and it is
-# not this script's business to move them.
-PROTECTED = {'Any'}
+# Nothing is protected any more. "Any" was, while its titles were being left
+# alone on purpose; now it migrates like the rest.
+PROTECTED = set()
 
 
 def migrate_collections(a):
