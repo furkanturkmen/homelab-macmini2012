@@ -123,11 +123,37 @@ def ensure_format(a, name, regex):
     }, 'POST')
 
 
+# R11. Scores that differ in one profile.
+#
+# HEVC is penalised everywhere because at 1080p x264 is plentiful and plays on
+# anything. At 2160p HEVC *is* the format, so the same -20 plus a
+# minFormatScore of 0 refuses every correctly-tagged 4K release and leaves only
+# the ones whose titles happen not to say what they are. Neutral there: no
+# penalty, no invented preference.
+#
+# Upgrades are turned on with it. A profile that can only ever hold one grab is
+# a poor fit for a tier where the first acceptable release is rarely the best.
+PROFILE_OVERRIDES = {
+    'Ultra-HD': {'scores': {'HEVC (x265)': 0}, 'upgradeAllowed': True},
+}
+
+
 def ensure_profiles(a, scores):
     """R1 - reject negatives; and score the named formats in every profile."""
     for p in a.get('qualityprofile'):
         dirty = False
         label = f'profile "{p["name"]}"'
+        over = PROFILE_OVERRIDES.get(p['name'], {})
+        # A separate name, not a rebinding of `scores`. Assigning to the
+        # parameter carried Ultra-HD's override into every profile processed
+        # after it - the dry run showed HD - 720p/1080p and Archive picking up
+        # a change meant for one profile.
+        effective = {**scores, **over.get('scores', {})}
+
+        if 'upgradeAllowed' in over and p.get('upgradeAllowed') != over['upgradeAllowed']:
+            a.say(f'{label}: upgradeAllowed {p.get("upgradeAllowed")} -> {over["upgradeAllowed"]}')
+            p['upgradeAllowed'] = over['upgradeAllowed']
+            dirty = True
 
         if p.get('minFormatScore') != 0:
             a.say(f'{label}: minFormatScore {p.get("minFormatScore")} -> 0')
@@ -135,7 +161,7 @@ def ensure_profiles(a, scores):
             dirty = True
 
         for item in p.get('formatItems', []):
-            want = scores.get(item['name'])
+            want = effective.get(item['name'])
             if want is not None and item.get('score') != want:
                 a.say(f'{label}: "{item["name"]}" {item.get("score")} -> {want}')
                 item['score'] = want
@@ -294,7 +320,8 @@ def main():
             ensure_format(a, 'Repack/Proper', r'\b(PROPER|REPACK)\b')
             if name == 'radarr':
                 ensure_format(a, 'Italian release', r'\b(ITA|ITALIAN)\b')
-            ensure_profiles(a, {'Repack/Proper': 5, 'Italian release': -1000})
+            ensure_profiles(a, {'Repack/Proper': 5, 'Italian release': -1000,
+                                'HEVC (x265)': -20, 'AV1': -25})
             ensure_fallback_rungs(a)
             ensure_metadata(a)
             if name == 'radarr':
