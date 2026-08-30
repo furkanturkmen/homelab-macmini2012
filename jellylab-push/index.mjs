@@ -2,10 +2,18 @@
  * jellylab-push — answers the questions about the homelab that the Jellylab
  * app needs and Jellyfin cannot.
  *
- * At present that is one question: how much room is left on the media drive.
- * Jellyfin has no API for it — it reports what is in the library, never what is
- * left to put there — and this container already has the media mount visible,
- * so a single statfs answers it.
+ * Two questions so far.
+ *
+ * How much room is left on the media drive: Jellyfin has no API for it — it
+ * reports what is in the library, never what is left to put there — and this
+ * container already has the media mount visible, so a single statfs answers it.
+ *
+ * And what is actually downloading. Jellyseerr reports that already, but it
+ * asks Sonarr for its queue without raising the page size, so it only ever sees
+ * the first twenty rows. Sonarr queues one row per *episode*, so a single
+ * 23-episode season pack fills the page on its own and everything behind it
+ * looks idle - including, absurdly, whichever download is actually moving while
+ * a stalled one sits at the top. This reads the whole queue.
  *
  * It used to also bridge ntfy to Expo Push, so notifications would arrive
  * inside the app rather than in ntfy's own app. That is gone. Native iOS push
@@ -26,6 +34,12 @@ import { statfs } from 'node:fs/promises';
 const {
   PUSH_PORT = '8099',
   MEDIA_PATH = '/media',
+  // The API keys stay here, on the server. The app asks this service instead,
+  // so a phone never holds a credential that can rewrite the library.
+  SONARR_URL = 'http://sonarr:8989',
+  SONARR_API_KEY = '',
+  RADARR_URL = 'http://radarr:7878',
+  RADARR_API_KEY = '',
 } = process.env;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -34,6 +48,76 @@ const send = (res, code, obj) => {
   res.writeHead(code, { 'content-type': 'application/json' });
   res.end(JSON.stringify(obj));
 };
+
+/**
+ * One page of a Sonarr or Radarr queue.
+ *
+ * Both are the same API with a different noun, so one function serves both.
+ * The timeout matters: a wedged *arr should make this endpoint answer without
+ * progress, not hang the app waiting for it.
+ */
+async function queuePage(base, key, page, extra) {
+  const url = `${base}/api/v3/queue?page=${page}&pageSize=200&${extra}&apikey=${key}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+/**
+ * The whole queue, not the first page of it.
+ *
+ * Paging until the records run out is the entire point of this endpoint - the
+ * bug being worked around is precisely an assumption that page one is
+ * everything. Capped at ten pages so a runaway queue cannot spin here forever.
+ */
+async function wholeQueue(base, key, extra) {
+  const records = [];
+  for (let page = 1; page <= 10; page++) {
+    const body = await queuePage(base, key, page, extra);
+    const batch = body.records ?? [];
+    records.push(...batch);
+    if (records.length >= (body.totalRecords ?? 0) || batch.length === 0) break;
+  }
+  return records;
+}
+
+/**
+ * Queue rows collapsed to one entry per title, keyed by TMDB id.
+ *
+ * A season pack appears once per episode - 23 rows describing one torrent, each
+ * carrying the size of the whole thing. Summing them would report 23 times the
+ * real size, so the largest row wins instead: they all describe the same
+ * download, so the largest is the download.
+ *
+ * TMDB rather than TVDB because that is what Jellyseerr keys a request on, and
+ * matching them up is the only reason this exists.
+ */
+function byTmdbId(records, pick) {
+  const out = {};
+  for (const r of records) {
+    const parent = pick(r);
+    const tmdbId = parent?.tmdbId;
+    if (!tmdbId) continue;
+
+    const size = r.size ?? 0;
+    const left = r.sizeleft ?? r.sizeLeft ?? 0;
+    const prev = out[tmdbId];
+    if (prev && prev.size >= size) continue;
+
+    out[tmdbId] = {
+      size,
+      sizeLeft: left,
+      percent: size > 0 ? Math.max(0, Math.min(1, (size - left) / size)) : null,
+      // Sonarr says "warning" for a stalled torrent and puts the reason in
+      // errorMessage; that is worth showing, because a stalled download and a
+      // slow one look identical from a percentage alone.
+      status: r.trackedDownloadState ?? r.status ?? null,
+      stalled: /stalled|no connections/i.test(r.errorMessage ?? ''),
+      title: r.title ?? null,
+    };
+  }
+  return out;
+}
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -59,6 +143,39 @@ const server = createServer(async (req, res) => {
     } catch (err) {
       return send(res, 500, { error: `cannot read ${MEDIA_PATH}: ${err.message}` });
     }
+  }
+
+  /**
+   * What is downloading, keyed by TMDB id so the app can line it up with a
+   * Jellyseerr request.
+   *
+   * Unauthenticated for the same reason as /storage: it is progress numbers on
+   * a service reachable only over the LAN or the mesh, and the mesh policy lets
+   * guests reach 8096 and nothing else. It holds the API keys but never returns
+   * them.
+   *
+   * A dead *arr costs its own half of the answer and nothing more - the other
+   * half still comes back, with the failure named.
+   */
+  if (url.pathname === '/downloads') {
+    const errors = {};
+    const [tv, movies] = await Promise.all([
+      SONARR_API_KEY
+        ? wholeQueue(SONARR_URL, SONARR_API_KEY, 'includeSeries=true')
+            .then(r => byTmdbId(r, x => x.series))
+            .catch(e => { errors.sonarr = e.message; return {}; })
+        : Promise.resolve({}),
+      RADARR_API_KEY
+        ? wholeQueue(RADARR_URL, RADARR_API_KEY, 'includeMovie=true')
+            .then(r => byTmdbId(r, x => x.movie))
+            .catch(e => { errors.radarr = e.message; return {}; })
+        : Promise.resolve({}),
+    ]);
+    return send(res, 200, {
+      tv,
+      movies,
+      ...(Object.keys(errors).length ? { errors } : {}),
+    });
   }
 
   return send(res, 404, { error: 'not found' });
