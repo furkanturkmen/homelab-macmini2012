@@ -2,7 +2,7 @@
  * jellylab-push — answers the questions about the homelab that the Jellylab
  * app needs and Jellyfin cannot.
  *
- * Three questions so far.
+ * Four questions so far.
  *
  * How much room is left on the media drive: Jellyfin has no API for it — it
  * reports what is in the library, never what is left to put there — and this
@@ -19,6 +19,11 @@
  * "Processing" indefinitely and reads as a search finding nothing, when Radarr
  * has simply not started one and should not: isAvailable is false until the
  * film reaches its minimumAvailability.
+ *
+ * And, asked by hand rather than polled, what could actually be grabbed for a
+ * title that is going nowhere. "Searching" covers both a release being chosen
+ * badly and no permitted release existing at all, and those need opposite
+ * fixes.
  *
  * It used to also bridge ntfy to Expo Push, so notifications would arrive
  * inside the app rather than in ntfy's own app. That is gone. Native iOS push
@@ -133,6 +138,22 @@ function byTmdbId(records, pick) {
       timeLeft: r.timeleft ?? null,
       indexer: r.indexer ?? null,
       client: r.downloadClient ?? null,
+      /*
+       * What was actually chosen, so the app can show it rather than only how
+       * far along it is.
+       *
+       * The score is the interesting one. A release carrying PROPER in its
+       * title outranks everything on revision alone, ahead of any custom
+       * format score, so a negative score on a download in progress means the
+       * ranking picked something the profile actively did not want.
+       */
+      quality: r.quality?.quality?.name ?? null,
+      score: r.customFormatScore ?? null,
+      languages: (r.languages ?? []).map(l => l?.name).filter(Boolean),
+      // Sonarr's own words for why it is stuck. "The download is stalled with
+      // no connections" is the seed count expressed as a symptom, and unlike a
+      // seed count it needs no second credential to read.
+      error: r.errorMessage ?? null,
     };
   }
   return out;
@@ -216,6 +237,89 @@ async function airingSeries(base, key) {
   return out;
 }
 
+/**
+ * Resolve a TMDB id to the id Radarr or Sonarr uses internally.
+ *
+ * The app only ever knows a TMDB id, because that is what Jellyseerr keys a
+ * request on. Radarr indexes movies by it directly; Sonarr carries it on the
+ * series alongside the TVDB id it actually prefers, so both are a lookup.
+ */
+async function localId(base, key, path, tmdbId) {
+  const res = await fetch(`${base}/api/v3/${path}?apikey=${key}`, {
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const hit = (await res.json()).find(x => String(x.tmdbId) === String(tmdbId));
+  return hit ? { id: hit.id, title: hit.title } : null;
+}
+
+/**
+ * What could be grabbed for one title, and what was refused.
+ *
+ * The app says "searching" for two situations that are nothing alike. Fall
+ * found 269 releases and accepted 42, then grabbed a PROPER that turned out to
+ * be an .exe - the choosing was wrong. Bin Roye found seven and accepted none,
+ * every one a DVDRip against a profile that starts at 720p - so no amount of
+ * searching will ever succeed. Both looked identical from the phone.
+ *
+ * Only accepted releases are listed. A list of things that cannot be grabbed
+ * is noise, and the ones that can be are what a person is choosing between.
+ * But when nothing is accepted that empty list is the diagnosis rather than a
+ * blank screen, so the count and the reasons come back regardless - they are
+ * the entire answer in that case.
+ *
+ * This runs a live search across every indexer and takes tens of seconds. It
+ * is asked for by hand from one card, never polled.
+ */
+async function candidates(base, key, query, limit = 10) {
+  const res = await fetch(`${base}/api/v3/release?${query}&apikey=${key}`, {
+    signal: AbortSignal.timeout(120000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const all = await res.json();
+
+  const accepted = all.filter(r => !r.rejected);
+
+  // Why the refused ones were refused, commonest first. Counted rather than
+  // listed: seven rejections reading "DVD is not wanted in profile" is one
+  // fact, not seven.
+  const rejections = {};
+  for (const r of all) {
+    for (const reason of r.rejections ?? []) {
+      rejections[reason] = (rejections[reason] ?? 0) + 1;
+    }
+  }
+
+  return {
+    found: all.length,
+    accepted: accepted.length,
+    releases: accepted
+      // Score first because that is what the profile actually wants, seeders
+      // second because between two equally wanted releases the one people are
+      // still sharing is the one that will finish.
+      .sort((a, b) =>
+        (b.customFormatScore ?? 0) - (a.customFormatScore ?? 0) ||
+        (b.seeders ?? 0) - (a.seeders ?? 0))
+      .slice(0, limit)
+      .map(r => ({
+        title: r.title ?? null,
+        quality: r.quality?.quality?.name ?? null,
+        // A PROPER or REPACK. Worth showing plainly: it is the flag that wins
+        // a ranking outright, and the flag a hostile release forges.
+        proper: (r.quality?.revision?.version ?? 1) > 1,
+        score: r.customFormatScore ?? 0,
+        seeders: r.seeders ?? null,
+        leechers: r.leechers ?? null,
+        size: r.size ?? null,
+        indexer: r.indexer ?? null,
+        languages: (r.languages ?? []).map(l => l?.name).filter(Boolean),
+        age: r.ageDays ?? null,
+      })),
+    rejections: Object.fromEntries(
+      Object.entries(rejections).sort((a, b) => b[1] - a[1]).slice(0, 6)),
+  };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
 
@@ -283,6 +387,45 @@ const server = createServer(async (req, res) => {
       airing,
       ...(Object.keys(errors).length ? { errors } : {}),
     });
+  }
+
+  /**
+   * The releases that could be grabbed for one title.
+   *
+   * Asked for from a single card when a request has sat still long enough to
+   * be worth asking about, never polled: it runs a live search across every
+   * indexer and takes tens of seconds.
+   *
+   * Movies need only a TMDB id. Television needs a season too - Sonarr
+   * searches a season or an episode, never a whole series - and the app has
+   * one, because a Jellyseerr request is made per season.
+   */
+  if (url.pathname === '/candidates') {
+    const tmdbId = url.searchParams.get('tmdbId');
+    const type = url.searchParams.get('type') === 'tv' ? 'tv' : 'movie';
+    const season = url.searchParams.get('season');
+    if (!tmdbId) return send(res, 400, { error: 'tmdbId required' });
+
+    const tv = type === 'tv';
+    const key = tv ? SONARR_API_KEY : RADARR_API_KEY;
+    const svc = tv ? SONARR_URL : RADARR_URL;
+    if (!key) return send(res, 503, { error: `${tv ? 'sonarr' : 'radarr'} not configured` });
+    if (tv && season === null) return send(res, 400, { error: 'season required for tv' });
+
+    try {
+      const found = await localId(svc, key, tv ? 'series' : 'movie', tmdbId);
+      // Not tracked at all is a real answer, and a different one from finding
+      // nothing to grab: nobody is searching because nothing was ever added.
+      if (!found) return send(res, 200, { tracked: false, found: 0, accepted: 0, releases: [], rejections: {} });
+
+      const query = tv
+        ? `seriesId=${found.id}&seasonNumber=${encodeURIComponent(season)}`
+        : `movieId=${found.id}`;
+      const out = await candidates(svc, key, query);
+      return send(res, 200, { tracked: true, title: found.title, ...out });
+    } catch (err) {
+      return send(res, 502, { error: err.message });
+    }
   }
 
   return send(res, 404, { error: 'not found' });
