@@ -295,8 +295,22 @@ async function qbitLive() {
   });
   if (!auth.ok) throw new Error(`login ${auth.status}`);
 
+  /*
+   * Whatever the cookie is called.
+   *
+   * qBittorrent has named this SID historically and names it QBT_SID_<port>
+   * now - this install returns QBT_SID_8083. Matching the old name exactly
+   * meant a login that succeeded with a 204 and a perfectly good cookie was
+   * reported as "no session cookie", which reads like bad credentials and is
+   * not.
+   *
+   * A rejected login is a 200 carrying the word "Fails." rather than an error
+   * status, so an empty cookie is the only signal that it did not work.
+   */
   const cookie = (auth.headers.get('set-cookie') ?? '').split(';')[0];
-  if (!cookie.startsWith('SID=')) throw new Error('no session cookie');
+  if (!/^[^=]*SID[^=]*=./i.test(cookie)) {
+    throw new Error(cookie ? `unexpected cookie ${cookie.split('=')[0]}` : 'login rejected');
+  }
 
   const res = await fetch(`${QBIT_URL}/api/v2/torrents/info`, {
     headers: { Cookie: cookie },
