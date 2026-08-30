@@ -28,6 +28,7 @@ Dry run by default. Pass --apply to write.
 """
 import argparse
 import json
+import subprocess
 import os
 import sys
 import urllib.error
@@ -82,9 +83,11 @@ CUTOFF = 'WEB 1080p'
 #
 # Change these to "HD 1080p" if you would rather tighten them; it is one edit
 # and the dry run will list every title it touches.
+DEFAULT_PROFILE = 'HD'
+
 MIGRATIONS = {
-    'HD-1080p (720p fallback)': 'HD',
-    'HD-1080p': 'HD',
+    'HD-1080p (720p fallback)': DEFAULT_PROFILE,
+    'HD-1080p': DEFAULT_PROFILE,
     'Archive (DVD to 1080p)': 'CAM',
 }
 
@@ -288,6 +291,66 @@ def report_unused(a, keep, prune=False):
             a.changed -= 1
 
 
+def repoint_jellyseerr(apply_):
+    """Point Jellyseerr at a profile that still exists.
+
+    Jellyseerr stores the quality profile it requests with as a bare id. Delete
+    that profile and nothing complains: the id simply dangles, and the next
+    request either fails or lands wherever Radarr decides to fall back to. This
+    was found the hard way - a new request came in on a profile nobody chose,
+    hours after the prune, with Jellyseerr still naming a deleted id 4.
+
+    Runs after the prune, and only repairs a dangling reference. A deliberate
+    choice of default is left alone.
+    """
+    try:
+        raw = subprocess.run(
+            ['docker', 'exec', 'jellyseerr', 'sh', '-c', 'cat /app/config/settings.json'],
+            capture_output=True, text=True, timeout=20).stdout
+        key = json.loads(raw)['main']['apiKey']
+    except Exception as e:
+        print(f'  jellyseerr: cannot read settings ({e}) - check its default by hand')
+        return
+
+    base = f'http://{HOST}:5055/api/v1'
+
+    def call(path, body=None, method='GET'):
+        req = urllib.request.Request(
+            base + path,
+            data=json.dumps(body).encode() if body is not None else None,
+            method=method, headers={'X-Api-Key': key, 'Content-Type': 'application/json'})
+        out = urllib.request.urlopen(req, timeout=25).read()
+        return json.loads(out) if out else None
+
+    for kind, port, var in (('radarr', 7878, 'RADARR_API_KEY'),
+                            ('sonarr', 8989, 'SONARR_API_KEY')):
+        ak = load_keys().get(var)
+        if not ak:
+            continue
+        live = {p['id']: p['name'] for p in json.load(urllib.request.urlopen(
+            f'http://{HOST}:{port}/api/v3/qualityprofile?apikey={ak}', timeout=20))}
+        by_name = {v: k for k, v in live.items()}
+
+        for srv in call(f'/settings/{kind}'):
+            current = srv.get('activeProfileId')
+            if current in live:
+                continue
+            # DEFAULT_PROFILE is what the migrations aim at, so a dangling
+            # reference lands where every migrated title already went.
+            target = by_name.get(DEFAULT_PROFILE)
+            if target is None:
+                print(f'  jellyseerr/{kind}: id {current} is gone and "{DEFAULT_PROFILE}"'
+                      ' does not exist - set it by hand')
+                continue
+            print(f'  {"->" if apply_ else "would"} jellyseerr/{kind}:'
+                  f' default {current} (deleted) -> {target} ({DEFAULT_PROFILE})')
+            if apply_:
+                sid = srv.pop('id')  # read-only in the body
+                srv['activeProfileId'] = target
+                srv['activeProfileName'] = DEFAULT_PROFILE
+                call(f'/settings/{kind}/{sid}', srv, 'PUT')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true')
@@ -313,6 +376,8 @@ def main():
         except urllib.error.HTTPError as e:
             print(f'  !! {e.code}: {e.read().decode()[:200]}')
         total += a.changed
+
+    repoint_jellyseerr(args.apply)
 
     print()
     print(f'{total} change(s) ' + ('applied.' if args.apply
