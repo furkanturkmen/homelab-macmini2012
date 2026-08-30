@@ -357,6 +357,36 @@ async function localId(base, key, path, tmdbId) {
 }
 
 /**
+ * One episode to search for, standing in for the season.
+ *
+ * Sonarr's season search queries every indexer for the season *and* for each
+ * episode, so a twelve-episode season is roughly twelve times the work. Across
+ * eight indexers that took over 400 seconds and the request timed out, which
+ * the app could only render as a failure - for a question that is answerable
+ * in a couple of seconds.
+ *
+ * One episode answers it. The releases that exist for episode one are the same
+ * releases that exist for the season - batches included, because a batch
+ * matches every episode in it - and the question being asked is "is anything
+ * grabbable at all", not "what exactly will be grabbed".
+ *
+ * Prefers an episode that is actually wanted: monitored, and without a file.
+ * Asking about one already on disk returns "existing file meets cutoff" and
+ * says nothing about whether the rest can be found.
+ */
+async function episodeToSearch(base, key, seriesId, season) {
+  const res = await fetch(
+    `${base}/api/v3/episode?seriesId=${seriesId}&seasonNumber=${encodeURIComponent(season)}&apikey=${key}`,
+    { signal: AbortSignal.timeout(15000) },
+  );
+  if (!res.ok) throw new Error(`${res.status}`);
+  const episodes = await res.json();
+  if (episodes.length === 0) return null;
+  const wanted = episodes.find(e => e.monitored && !e.hasFile);
+  return (wanted ?? episodes[0]).id;
+}
+
+/**
  * What could be grabbed for one title, and what was refused.
  *
  * The app says "searching" for two situations that are nothing alike. Fall
@@ -527,9 +557,20 @@ const server = createServer(async (req, res) => {
       // nothing to grab: nobody is searching because nothing was ever added.
       if (!found) return send(res, 200, { tracked: false, found: 0, accepted: 0, releases: [], rejections: {} });
 
-      const query = tv
-        ? `seriesId=${found.id}&seasonNumber=${encodeURIComponent(season)}`
-        : `movieId=${found.id}`;
+      let query;
+      if (tv) {
+        // One episode rather than the whole season - see episodeToSearch.
+        const episodeId = await episodeToSearch(svc, key, found.id, season);
+        if (episodeId == null) {
+          return send(res, 200, {
+            tracked: true, title: found.title,
+            found: 0, accepted: 0, releases: [], rejections: {},
+          });
+        }
+        query = `episodeId=${episodeId}`;
+      } else {
+        query = `movieId=${found.id}`;
+      }
       const out = await candidates(svc, key, query);
       return send(res, 200, { tracked: true, title: found.title, ...out });
     } catch (err) {
