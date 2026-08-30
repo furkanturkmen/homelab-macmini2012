@@ -50,6 +50,12 @@ const {
   SONARR_API_KEY = '',
   RADARR_URL = 'http://radarr:7878',
   RADARR_API_KEY = '',
+  // qBittorrent, for the numbers the *arrs only refresh once a minute.
+  // Optional: without a password everything below is skipped and the app gets
+  // exactly what it got before.
+  QBIT_URL = 'http://gluetun:8083',
+  QBIT_USER = '',
+  QBIT_PASSWORD = '',
 } = process.env;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -102,7 +108,7 @@ async function wholeQueue(base, key, extra) {
  * TMDB rather than TVDB because that is what Jellyseerr keys a request on, and
  * matching them up is the only reason this exists.
  */
-function byTmdbId(records, pick) {
+function byTmdbId(records, pick, live = {}) {
   const out = {};
   for (const r of records) {
     const parent = pick(r);
@@ -111,6 +117,7 @@ function byTmdbId(records, pick) {
 
     const size = r.size ?? 0;
     const left = r.sizeleft ?? r.sizeLeft ?? 0;
+    const hash = (r.downloadId ?? '').toLowerCase();
     const prev = out[tmdbId];
     if (prev && prev.size >= size) continue;
 
@@ -154,6 +161,24 @@ function byTmdbId(records, pick) {
       // no connections" is the seed count expressed as a symptom, and unlike a
       // seed count it needs no second credential to read.
       error: r.errorMessage ?? null,
+      /*
+       * Straight from qBittorrent, when it could be reached.
+       *
+       * Kept beside the *arr figures rather than replacing them: the app has
+       * to render when this service has no qBittorrent password, and a screen
+       * that works only when every credential is present is worse than one
+       * that degrades.
+       */
+      ...(hash && live[hash]
+        ? {
+            livePercent: live[hash].percent,
+            liveSpeed: live[hash].speed,
+            seeders: live[hash].seeders,
+            seedersTotal: live[hash].seedersTotal,
+            peers: live[hash].peers,
+            clientState: live[hash].state,
+          }
+        : {}),
     };
   }
   return out;
@@ -233,6 +258,70 @@ async function airingSeries(base, key) {
     if (Object.keys(seasons).length > 0) {
       out[show.tmdbId] = { status: show.status ?? null, seasons };
     }
+  }
+  return out;
+}
+
+/**
+ * Live figures straight from the torrent client.
+ *
+ * Sonarr and Radarr refresh their queues from qBittorrent once a minute, so
+ * everything derived from them is up to a minute stale - which at 20MB/s is
+ * over a gigabyte. A download would show 0% and "< 1 MB/s" in the app while
+ * qBittorrent had it at 22% and 20MB/s, because Radarr had not looked again
+ * since the moment it was grabbed.
+ *
+ * This reads qBittorrent directly and merges by torrent hash. It is also the
+ * only place a seed count exists: the *arr queue record has no such field.
+ *
+ * Entirely optional. With no password configured this returns an empty map and
+ * every caller carries on with the *arr figures, exactly as before.
+ *
+ * The session cookie is fetched per call rather than cached. This is asked for
+ * once every few seconds by one screen, a login costs one round trip on the
+ * docker network, and a cached cookie that has silently expired is a class of
+ * bug not worth inviting for that.
+ */
+async function qbitLive() {
+  if (!QBIT_PASSWORD) return {};
+
+  const body = new URLSearchParams({ username: QBIT_USER, password: QBIT_PASSWORD });
+  const auth = await fetch(`${QBIT_URL}/api/v2/auth/login`, {
+    method: 'POST',
+    body,
+    // qBittorrent rejects a login whose Referer is not its own origin.
+    headers: { Referer: QBIT_URL },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!auth.ok) throw new Error(`login ${auth.status}`);
+
+  const cookie = (auth.headers.get('set-cookie') ?? '').split(';')[0];
+  if (!cookie.startsWith('SID=')) throw new Error('no session cookie');
+
+  const res = await fetch(`${QBIT_URL}/api/v2/torrents/info`, {
+    headers: { Cookie: cookie },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+
+  const out = {};
+  for (const t of await res.json()) {
+    // The *arrs record the hash uppercase in downloadId; qBittorrent reports
+    // it lowercase. Lowercase is the key everywhere here.
+    out[String(t.hash).toLowerCase()] = {
+      percent: typeof t.progress === 'number' ? t.progress : null,
+      speed: t.dlspeed ?? null,
+      up: t.upspeed ?? null,
+      // num_seeds is what we are connected to; num_complete is what the
+      // tracker claims exists. The gap is the whole story on a dead swarm -
+      // Bin Roye showed 0 of 14 for hours.
+      seeders: t.num_seeds ?? null,
+      seedersTotal: t.num_complete ?? null,
+      peers: t.num_leechs ?? null,
+      // downloading | stalledDL | metaDL | pausedDL | uploading | ...
+      state: t.state ?? null,
+      eta: t.eta ?? null,
+    };
   }
   return out;
 }
@@ -363,15 +452,18 @@ const server = createServer(async (req, res) => {
    */
   if (url.pathname === '/downloads') {
     const errors = {};
+    // Fetched first, because both queues want to merge against it. A failure
+    // here costs the live figures and nothing else.
+    const live = await qbitLive().catch(e => { errors.qbittorrent = e.message; return {}; });
     const [tv, movies, unreleased, airing] = await Promise.all([
       SONARR_API_KEY
         ? wholeQueue(SONARR_URL, SONARR_API_KEY, 'includeSeries=true')
-            .then(r => byTmdbId(r, x => x.series))
+            .then(r => byTmdbId(r, x => x.series, live))
             .catch(e => { errors.sonarr = e.message; return {}; })
         : Promise.resolve({}),
       RADARR_API_KEY
         ? wholeQueue(RADARR_URL, RADARR_API_KEY, 'includeMovie=true')
-            .then(r => byTmdbId(r, x => x.movie))
+            .then(r => byTmdbId(r, x => x.movie, live))
             .catch(e => { errors.radarr = e.message; return {}; })
         : Promise.resolve({}),
       RADARR_API_KEY
