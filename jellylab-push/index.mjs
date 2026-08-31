@@ -193,6 +193,10 @@ function byTmdbId(records, pick, live = {}) {
   return out;
 }
 
+/** What a dead Radarr or Sonarr returns, so the shape never varies. */
+const EMPTY_MOVIE_STATE = { unreleased: {}, onDisk: {} };
+const EMPTY_SERIES_STATE = { airing: {}, onDisk: {} };
+
 /**
  * The films Radarr is deliberately not looking for yet.
  *
@@ -204,6 +208,10 @@ function byTmdbId(records, pick, live = {}) {
  *
  * Only the unavailable ones are returned. The library is hundreds of films and
  * the app only needs the handful that are waiting on the world.
+ *
+ * The same pass reports what is already on disk, since it has every film in
+ * hand and the app has no other way to know. See onDiskSeries for why that
+ * matters.
  */
 async function unreleasedMovies(base, key) {
   const res = await fetch(`${base}/api/v3/movie?apikey=${key}`, {
@@ -211,8 +219,11 @@ async function unreleasedMovies(base, key) {
   });
   if (!res.ok) throw new Error(`${res.status}`);
   const out = {};
+  const disk = {};
   for (const m of await res.json()) {
-    if (m.isAvailable || m.hasFile || !m.tmdbId) continue;
+    if (!m.tmdbId) continue;
+    if (m.hasFile) disk[m.tmdbId] = { file: true };
+    if (m.isAvailable || m.hasFile) continue;
     out[m.tmdbId] = {
       // announced | inCinemas | released | deleted
       status: m.status ?? null,
@@ -221,7 +232,7 @@ async function unreleasedMovies(base, key) {
       physicalRelease: m.physicalRelease ?? null,
     };
   }
-  return out;
+  return { unreleased: out, onDisk: disk };
 }
 
 /**
@@ -235,6 +246,17 @@ async function unreleasedMovies(base, key) {
  * totalEpisodeCount how many there will be, and nextAiring when the following
  * one is due. Only seasons with something still to come are returned - a
  * finished series has nothing to say here.
+ *
+ * The same pass reports what is already on disk, which a finished season very
+ * much does have something to say about. Between Sonarr importing a season and
+ * Jellyseerr noticing there is a window of up to two scan cycles where the
+ * request still reads "Processing" and the app, having nothing better, said it
+ * was still looking for something already downloaded. No Game No Life missed
+ * a sweep by thirty-nine seconds and spent six minutes claiming exactly that.
+ *
+ * episodeFileCount against episodeCount is the comparison - both count
+ * monitored episodes, so they agree with each other even where episodeCount
+ * disagrees with the total.
  */
 async function airingSeries(base, key) {
   const res = await fetch(`${base}/api/v3/series?apikey=${key}`, {
@@ -242,9 +264,11 @@ async function airingSeries(base, key) {
   });
   if (!res.ok) throw new Error(`${res.status}`);
   const out = {};
+  const disk = {};
   for (const show of await res.json()) {
     if (!show.tmdbId) continue;
     const seasons = {};
+    const onDisk = {};
     for (const season of show.seasons ?? []) {
       // Season 0 is specials, which air on no schedule and are not what
       // anyone means by "has it aired yet".
@@ -257,6 +281,17 @@ async function airingSeries(base, key) {
        * in 2012 and reported exactly that. A nextAiring date means there is
        * genuinely more to come; its absence means there is not.
        */
+      /*
+       * Recorded before the nextAiring gate, because this half is about the
+       * seasons that gate throws away: a season with nothing left to air is
+       * exactly the one that can be sitting complete on disk.
+       */
+      if ((st.episodeCount ?? 0) > 0) {
+        onDisk[season.seasonNumber] = {
+          files: st.episodeFileCount ?? 0,
+          episodes: st.episodeCount ?? 0,
+        };
+      }
       if (!st.nextAiring) continue;
       seasons[season.seasonNumber] = {
         aired: st.episodeCount ?? 0,
@@ -267,8 +302,9 @@ async function airingSeries(base, key) {
     if (Object.keys(seasons).length > 0) {
       out[show.tmdbId] = { status: show.status ?? null, seasons };
     }
+    if (Object.keys(onDisk).length > 0) disk[show.tmdbId] = { seasons: onDisk };
   }
-  return out;
+  return { airing: out, onDisk: disk };
 }
 
 /**
@@ -728,7 +764,7 @@ const server = createServer(async (req, res) => {
     // Fetched first, because both queues want to merge against it. A failure
     // here costs the live figures and nothing else.
     const live = await qbitLive().catch(e => { errors.qbittorrent = e.message; return {}; });
-    const [tv, movies, unreleased, airing] = await Promise.all([
+    const [tv, movies, radarrState, sonarrState] = await Promise.all([
       SONARR_API_KEY
         ? wholeQueue(SONARR_URL, SONARR_API_KEY, 'includeSeries=true')
             .then(r => byTmdbId(r, x => x.series, live))
@@ -741,18 +777,21 @@ const server = createServer(async (req, res) => {
         : Promise.resolve({}),
       RADARR_API_KEY
         ? unreleasedMovies(RADARR_URL, RADARR_API_KEY)
-            .catch(e => { errors.radarrMovies = e.message; return {}; })
-        : Promise.resolve({}),
+            .catch(e => { errors.radarrMovies = e.message; return EMPTY_MOVIE_STATE; })
+        : Promise.resolve(EMPTY_MOVIE_STATE),
       SONARR_API_KEY
         ? airingSeries(SONARR_URL, SONARR_API_KEY)
-            .catch(e => { errors.sonarrSeries = e.message; return {}; })
-        : Promise.resolve({}),
+            .catch(e => { errors.sonarrSeries = e.message; return EMPTY_SERIES_STATE; })
+        : Promise.resolve(EMPTY_SERIES_STATE),
     ]);
     return send(res, 200, {
       tv,
       movies,
-      unreleased,
-      airing,
+      unreleased: radarrState.unreleased,
+      airing: sonarrState.airing,
+      // Films and seasons Sonarr and Radarr have already imported. One TMDB id
+      // cannot be both, so the two maps merge without colliding.
+      onDisk: { ...radarrState.onDisk, ...sonarrState.onDisk },
       // Cached answers from the background sweep - never computed on this
       // request, which is polled every few seconds.
       verdicts: verdicts(),
