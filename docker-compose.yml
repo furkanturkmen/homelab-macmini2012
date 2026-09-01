@@ -62,6 +62,22 @@ services:
     volumes:
       - ./uptime-kuma/data:/app/data
 
+  homarr:
+    container_name: homarr
+    image: ghcr.io/homarr-labs/homarr:latest
+    restart: unless-stopped
+    ports:
+      - "7575:7575"
+    environment:
+      TZ: "${TZ}"
+      # Homarr encrypts every integration API key it stores with this. Losing it
+      # means re-entering each one; changing it makes the saved ones unreadable.
+      SECRET_ENCRYPTION_KEY: "${HOMARR_SECRET_KEY}"
+    volumes:
+      - ./homarr/appdata:/appdata
+      # Deliberately no docker.sock: the container-status widget is not worth
+      # handing root on the host to a service that faces the browser.
+
   watchtower:
     container_name: watchtower
     image: nickfedor/watchtower:latest
