@@ -41,6 +41,8 @@
 import { createServer } from 'node:http';
 import { statfs } from 'node:fs/promises';
 
+import * as filters from './filters.mjs';
+
 const {
   PUSH_PORT = '8099',
   MEDIA_PATH = '/media',
@@ -759,6 +761,83 @@ const server = createServer(async (req, res) => {
    * A dead *arr costs its own half of the answer and nothing more - the other
    * half still comes back, with the failure named.
    */
+  /**
+   * Content filters: named bundles of TMDB keywords, assigned to people.
+   *
+   * Reading is open like the rest of this service - the app needs the list to
+   * know what to leave out of discover, and the list is names of keywords, not
+   * anything about anyone. Writing is not: it changes what other members of
+   * the household can see, so it asks Jellyfin whether the caller's own token
+   * belongs to an administrator. The token is forwarded, never stored.
+   */
+  if (url.pathname === '/filters' && req.method === 'GET') {
+    try {
+      return send(res, 200, await filters.load());
+    } catch (err) {
+      return send(res, 500, { error: err.message });
+    }
+  }
+
+  /**
+   * What applies to one person, flattened.
+   *
+   * The app asks for itself, so a wrong id costs the caller their own filters
+   * and reveals nothing about anyone else.
+   */
+  if (url.pathname === '/filters/for' && req.method === 'GET') {
+    try {
+      const doc = await filters.load();
+      return send(res, 200, filters.resolveFor(doc, url.searchParams.get('user') || ''));
+    } catch (err) {
+      return send(res, 500, { error: err.message });
+    }
+  }
+
+  if (url.pathname === '/filters' && req.method === 'PUT') {
+    try {
+      await filters.requireAdmin(req.headers['x-emby-token']);
+    } catch (err) {
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 262144) return send(res, 413, { error: 'too large' });
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(body || '{}');
+    } catch {
+      return send(res, 400, { error: 'invalid json' });
+    }
+    try {
+      const saved = await filters.replace(parsed);
+      log(`filters saved: ${saved.filters.length} filter(s)`);
+      return send(res, 200, saved);
+    } catch (err) {
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
+  /**
+   * Push the assignments into Jellyfin's per-user BlockedTags.
+   *
+   * This is the only part that is enforced rather than merely tidy, which is
+   * why it is a separate, deliberate call rather than a side effect of saving.
+   */
+  if (url.pathname === '/filters/apply' && req.method === 'POST') {
+    const token = req.headers['x-emby-token'];
+    try {
+      await filters.requireAdmin(token);
+      const doc = await filters.load();
+      const applied = await filters.applyToJellyfin(doc, token);
+      log(`filters applied to ${applied.length} user(s)`);
+      return send(res, 200, { applied });
+    } catch (err) {
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
   if (url.pathname === '/downloads') {
     const errors = {};
     // Fetched first, because both queues want to merge against it. A failure
