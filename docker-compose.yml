@@ -179,6 +179,26 @@ services:
     ports:
       - "6767:6767"
 
+  # Transcribes and translates the audio itself, for the anime nobody ever
+  # subtitled. Adam's Sweet Agony has no subtitle on any of seven providers,
+  # no embedded stream, and no fansub posted to any tracker AnimeTosho
+  # mirrors - so there is nothing left to find, only something to make.
+  #
+  # faster_whisper with int8 because this is a 2012 i7 without AVX2; the
+  # episodes are 3.5 minutes each, so the whole season is 28 minutes of audio.
+  # No ports: only Bazarr talks to it, over the compose network.
+  whisper:
+    container_name: whisper
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ}"
+      ASR_ENGINE: "faster_whisper"
+      ASR_MODEL: "medium"
+      ASR_COMPUTE_TYPE: "int8"
+    volumes:
+      - ./whisper/cache:/root/.cache
+
   prowlarr:
     container_name: prowlarr
     image: linuxserver/prowlarr:latest
