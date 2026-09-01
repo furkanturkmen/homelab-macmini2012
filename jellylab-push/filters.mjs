@@ -70,6 +70,15 @@ export function validate(doc) {
     if (f.genres != null && (!Array.isArray(f.genres) || f.genres.some(g => !Number.isInteger(g)))) {
       return `filter ${f.id}: genres must be integers`;
     }
+    // An age, not a label. Jellyfin's own rating scale is already ages - PG-13
+    // scores 13, TV-14 scores 14, R and TV-MA both score 17 - so one integer
+    // covers US TV ratings, US film ratings and Kijkwijzer at once.
+    if (f.maxAge != null && (!Number.isInteger(f.maxAge) || f.maxAge < 0 || f.maxAge > 21)) {
+      return `filter ${f.id}: maxAge must be an integer between 0 and 21`;
+    }
+    if (f.blockUnrated != null && typeof f.blockUnrated !== 'boolean') {
+      return `filter ${f.id}: blockUnrated must be a boolean`;
+    }
   }
   if (!doc.assignments || typeof doc.assignments !== 'object') return 'assignments must be an object';
   for (const [who, list] of Object.entries(doc.assignments)) {
@@ -104,6 +113,10 @@ export function resolveFor(doc, jellyfinUserId) {
   const keywordNames = new Set();
   const genreIds = new Set();
   const names = [];
+  // The most restrictive assigned filter wins. Two filters on one person are
+  // two separate rules, and the stricter one is the one that means anything.
+  let maxAge = null;
+  let blockUnrated = false;
   for (const f of doc.filters) {
     if (!wanted.has(f.id)) continue;
     names.push(f.name);
@@ -112,12 +125,16 @@ export function resolveFor(doc, jellyfinUserId) {
       keywordNames.add(k.name);
     }
     for (const g of f.genres ?? []) genreIds.add(g);
+    if (f.maxAge != null) maxAge = maxAge == null ? f.maxAge : Math.min(maxAge, f.maxAge);
+    if (f.blockUnrated) blockUnrated = true;
   }
   return {
     filters: names,
     keywordIds: [...keywordIds],
     keywordNames: [...keywordNames],
     genreIds: [...genreIds],
+    maxAge,
+    blockUnrated,
   };
 }
 
@@ -188,13 +205,23 @@ export async function applyToJellyfin(doc, token) {
   const applied = [];
   for (const u of users) {
     if (u?.Policy?.IsAdministrator) continue;
-    const { keywordNames } = resolveFor(doc, u.Id);
-    const policy = { ...u.Policy, BlockedTags: keywordNames };
+    const { keywordNames, maxAge, blockUnrated } = resolveFor(doc, u.Id);
+    /*
+     * An unrated item carries no age, so an age cap alone lets it straight
+     * through - which is the wrong way round for the one setting whose whole
+     * job is caution. Movie and Series are the only kinds this library holds.
+     */
+    const policy = {
+      ...u.Policy,
+      BlockedTags: keywordNames,
+      MaxParentalRating: maxAge,
+      BlockUnratedItems: blockUnrated ? ['Movie', 'Series'] : [],
+    };
     await jellyfin(`/Users/${u.Id}/Policy`, token, {
       method: 'POST',
       body: JSON.stringify(policy),
     });
-    applied.push({ user: u.Name, id: u.Id, blockedTags: keywordNames });
+    applied.push({ user: u.Name, id: u.Id, blockedTags: keywordNames, maxAge, blockUnrated });
   }
   return applied;
 }

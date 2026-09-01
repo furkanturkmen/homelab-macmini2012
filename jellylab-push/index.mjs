@@ -39,7 +39,7 @@
  */
 
 import { createServer } from 'node:http';
-import { statfs } from 'node:fs/promises';
+import { statfs, readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 
 import * as filters from './filters.mjs';
 
@@ -407,6 +407,46 @@ async function qbitLive() {
 const VERDICTS = new Map();
 let sweeping = false;
 
+/*
+ * Verdicts survive a restart.
+ *
+ * A verdict costs a full sweep across every indexer and takes a minute per
+ * title, so losing them all is an hour of the Requests tab being less certain
+ * than it was: without one, "we looked and there is nothing" quietly becomes
+ * "still looking", which is a weaker statement about the same title. That is
+ * exactly what happened twice while this service was being restarted.
+ */
+const VERDICTS_PATH = process.env.VERDICTS_PATH || '/data/verdicts.json';
+
+async function loadVerdicts() {
+  try {
+    const raw = JSON.parse(await readFile(VERDICTS_PATH, 'utf8'));
+    for (const [key, v] of Object.entries(raw)) VERDICTS.set(key, v);
+    log(`verdicts restored: ${VERDICTS.size}`);
+  } catch (err) {
+    // A missing file is the normal first run.
+    if (err.code !== 'ENOENT') log(`verdicts not restored: ${err.message}`);
+  }
+}
+
+let saving = false;
+async function saveVerdicts() {
+  if (saving) return;
+  saving = true;
+  try {
+    await mkdir(VERDICTS_PATH.replace(/\/[^/]+$/, ''), { recursive: true });
+    const tmp = `${VERDICTS_PATH}.tmp`;
+    await writeFile(tmp, JSON.stringify(Object.fromEntries(VERDICTS)), 'utf8');
+    await rename(tmp, VERDICTS_PATH);
+  } catch (err) {
+    // Losing the cache costs accuracy, never correctness, so a failed write is
+    // logged and shrugged off rather than allowed to break a sweep.
+    log(`verdicts not saved: ${err.message}`);
+  } finally {
+    saving = false;
+  }
+}
+
 /** Monitored, still missing, and therefore worth asking about. */
 async function unfulfilled() {
   const out = [];
@@ -517,6 +557,7 @@ async function sweepOne() {
       rejections: out.rejections,
     });
     log(`swept ${stalest.type}:${stalest.tmdbId} found=${out.found} accepted=${out.accepted}`);
+    await saveVerdicts();
   } catch (err) {
     log(`sweep failed: ${err.message}`);
   } finally {
@@ -974,6 +1015,7 @@ const server = createServer(async (req, res) => {
   return send(res, 404, { error: 'not found' });
 });
 
+await loadVerdicts();
 server.listen(Number(PUSH_PORT), () => log(`listening on :${PUSH_PORT}`));
 
 /*
