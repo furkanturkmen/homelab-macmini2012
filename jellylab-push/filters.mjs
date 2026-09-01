@@ -20,6 +20,16 @@ import { dirname } from 'node:path';
 const STORE = process.env.FILTERS_PATH || '/data/filters.json';
 const JELLYFIN_URL = process.env.JELLYFIN_URL || 'http://jellyfin:8096';
 
+const JELLYSEERR_URL = process.env.JELLYSEERR_URL || 'http://jellyseerr:5055';
+const JELLYSEERR_API_KEY = process.env.JELLYSEERR_API_KEY || '';
+/*
+ * What was last pushed into Jellyseerr's blocklist, kept apart from the filter
+ * document on purpose: `replace()` rewrites that document down to
+ * {version, filters, assignments} every time the app saves, so anything
+ * recorded inside it would be lost on the next edit.
+ */
+const SEERR_STATE = process.env.SEERR_TAGS_PATH || '/data/seerr-tags.json';
+
 /** Assignments key meaning "everyone who is not an administrator". */
 export const EVERYONE = '*';
 
@@ -135,6 +145,111 @@ export function resolveFor(doc, jellyfinUserId) {
     genreIds: [...genreIds],
     maxAge,
     blockUnrated,
+  };
+}
+
+/* ---------------------------------------------------------------- Jellyseerr */
+
+async function seerr(path, init = {}) {
+  const res = await fetch(`${JELLYSEERR_URL}/api/v1${path}`, {
+    ...init,
+    headers: { 'X-Api-Key': JELLYSEERR_API_KEY, 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!res.ok) throw new Error(`jellyseerr ${path} -> ${res.status}`);
+  const text = await res.text();
+  return text ? JSON.parse(text) : {};
+}
+
+async function lastPushed() {
+  try {
+    const raw = await readFile(SEERR_STATE, 'utf8');
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed.tags) ? parsed.tags.filter(Number.isInteger) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Mirror the everyone-filter into Jellyseerr's own blocklist.
+ *
+ * This is the gap named at the top of this file: blocked tags in Jellyfin hold
+ * against every client, but Jellyseerr's web UI answers to none of that, so a
+ * title filtered out of the app was still one search away on the website.
+ *
+ * Only the assignment to EVERYONE is mirrored, and that is a limitation of
+ * Jellyseerr rather than a choice. Its blocklist is a **global** setting -
+ * `settings.main.blocklistedTags`, a comma-separated list of TMDB keyword ids
+ * that a background job expands into blocklisted titles. Per-user settings
+ * there carry request quotas and nothing else, so a filter assigned to one
+ * person cannot be enforced on that website at all. Say so rather than
+ * implying otherwise.
+ *
+ * What this last wrote is remembered, so unassigning a filter takes its tags
+ * back out again while leaving alone any tag added by hand in Jellyseerr's own
+ * settings. Replacing the list outright would silently discard those.
+ */
+export async function applyToJellyseerr(doc) {
+  if (!JELLYSEERR_API_KEY) {
+    throw Object.assign(new Error('jellyseerr api key not configured'), { status: 503 });
+  }
+
+  const wanted = resolveFor(doc, null).keywordIds.filter(Number.isInteger);
+  const previous = await lastPushed();
+
+  const main = await seerr('/settings/main');
+  const current = String(main.blocklistedTags ?? '')
+    .split(',')
+    .map(s => Number(s.trim()))
+    .filter(Number.isInteger);
+
+  // Ours come out, theirs stay, then ours go back in as they are now.
+  const keep = current.filter(id => !previous.includes(id));
+  const final = [...new Set([...keep, ...wanted])];
+
+  const limit = Number(main.blocklistedTagsLimit) || 50;
+  if (final.length > limit) {
+    throw Object.assign(
+      new Error(`jellyseerr allows ${limit} blocklisted tags, this would need ${final.length}`),
+      { status: 400 },
+    );
+  }
+
+  /*
+   * Only the tag list is written. `hideBlocklisted` is deliberately left as
+   * the administrator set it, because it does not mean what its name suggests:
+   * a blocklisted title already cannot be requested by anyone, and this flag
+   * additionally hides those titles from the discover pages of people who
+   * *can* manage the blocklist - the administrator included. Turning it on
+   * from here would quietly take the library away from the person applying the
+   * filter.
+   */
+  await seerr('/settings/main', {
+    method: 'POST',
+    body: JSON.stringify({ blocklistedTags: final.join(',') }),
+  });
+
+  await mkdir(dirname(SEERR_STATE), { recursive: true }).catch(() => {});
+  await writeFile(SEERR_STATE, JSON.stringify({ tags: wanted }), 'utf8');
+
+  // The blocklist itself is built by a scheduled job walking Discover for each
+  // tag, so without this the change lands whenever that next runs.
+  let jobStarted = true;
+  try {
+    await seerr('/settings/jobs/process-blocklisted-tags/run', { method: 'POST' });
+  } catch {
+    jobStarted = false;
+  }
+
+  return {
+    tags: final,
+    added: wanted.filter(id => !previous.includes(id)),
+    removed: previous.filter(id => !wanted.includes(id)),
+    kept: keep,
+    /** left as the administrator set it - see above */
+    hideBlocklisted: Boolean(main.hideBlocklisted),
+    jobStarted,
   };
 }
 

@@ -970,10 +970,18 @@ const server = createServer(async (req, res) => {
   }
 
   /**
-   * Push the assignments into Jellyfin's per-user BlockedTags.
+   * Push the assignments out to the two systems that can enforce them.
    *
-   * This is the only part that is enforced rather than merely tidy, which is
-   * why it is a separate, deliberate call rather than a side effect of saving.
+   * Jellyfin takes per-user BlockedTags, so a filter assigned to one person
+   * holds for that person on every client. Jellyseerr takes a **global** tag
+   * blocklist and nothing per-user - its per-user settings are request quotas
+   * - so only the everyone-filter can be mirrored there. That is a limit of
+   * Jellyseerr, not a decision made here.
+   *
+   * Jellyfin goes first and its failure is fatal, because that is the half
+   * that actually enforces anything. Jellyseerr failing is reported and does
+   * not undo the rest: a website still listing a title is worse than nothing,
+   * but far better than a library that stopped blocking it.
    */
   if (url.pathname === '/filters/apply' && req.method === 'POST') {
     const token = req.headers['x-emby-token'];
@@ -981,8 +989,25 @@ const server = createServer(async (req, res) => {
       await filters.requireAdmin(token);
       const doc = await filters.load();
       const applied = await filters.applyToJellyfin(doc, token);
-      log(`filters applied to ${applied.length} user(s)`);
-      return send(res, 200, { applied });
+      log(`filters applied to ${applied.length} jellyfin user(s)`);
+
+      let jellyseerr = null;
+      let jellyseerrError = null;
+      try {
+        jellyseerr = await filters.applyToJellyseerr(doc);
+        log(`filters -> jellyseerr: ${jellyseerr.tags.length} tag(s)`
+          + `, +${jellyseerr.added.length} -${jellyseerr.removed.length}`
+          + `${jellyseerr.jobStarted ? ', job started' : ', job NOT started'}`);
+      } catch (err) {
+        jellyseerrError = err.message;
+        log(`filters -> jellyseerr FAILED: ${err.message}`);
+      }
+
+      return send(res, 200, {
+        applied,
+        ...(jellyseerr ? { jellyseerr } : {}),
+        ...(jellyseerrError ? { jellyseerrError } : {}),
+      });
     } catch (err) {
       return send(res, err.status ?? 500, { error: err.message });
     }
