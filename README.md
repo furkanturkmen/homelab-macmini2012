@@ -72,6 +72,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 ### Admin
 - **Portainer** — web UI showing every container, click to start/stop/restart. Port `9000`.
 - **Uptime Kuma** — checks each service every minute, alerts you if one dies. Port `3001`.
+- **Homarr** — the dashboard you actually open first: one tile per service, plus widgets pulled from their APIs. Port `7575`.
 - **Watchtower** — quietly updates containers to their latest version every night at 4 AM. No web UI.
 
 ### Files
@@ -102,6 +103,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Network | jellylab-push | 8099 | ntfy to iOS app push bridge |
 | Admin | Portainer | 9000 / 9443 | Docker web UI |
 | Admin | Uptime Kuma | 3001 | Service monitor |
+| Admin | Homarr | 7575 | Dashboard / start page |
 | Admin | Watchtower | — | Auto-updater |
 | Files | Nextcloud | 8081 | Cloud drive |
 | Files | MariaDB | — | Nextcloud database |
