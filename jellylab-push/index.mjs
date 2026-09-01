@@ -820,34 +820,54 @@ async function cancel({ tmdbId, type, season }) {
   // Never tracked is a success, not a failure: there is nothing to stop.
   if (!found) return { tracked: false, removed: 0, releases: [], unmonitored: false };
 
-  const rows = await wholeQueue(base, key, tv ? 'includeEpisode=true' : '');
-  const mine = rows.filter(r => {
+  // Unmonitor FIRST. Clearing the queue before this leaves a window in which
+  // the *arr grabs something else, and that grab survives the cancel: the app
+  // removes the title from the *arr straight afterwards, so the new torrent is
+  // left running with nothing tracking it - the exact orphan this endpoint
+  // exists to prevent. Found in testing: eight Futurama rows were removed and
+  // episode nine, grabbed moments later, kept downloading after the series was
+  // gone from Sonarr.
+  const stopped = await setMonitored({ tmdbId, type, monitored: false, season });
+
+  const wanted = (r) => {
     if ((tv ? r.seriesId : r.movieId) !== found.id) return false;
     if (!tv || season == null) return true;
     return (r.seasonNumber ?? r.episode?.seasonNumber) === Number(season);
-  });
+  };
 
-  // A season pack is one torrent and twenty-three queue rows. Every row id has
-  // to go, but the releases are named once, because one is what was cancelled.
-  const releases = [...new Set(mine.map(r => r.title).filter(Boolean))];
-
-  if (mine.length) {
+  const kill = async (rows) => {
+    if (!rows.length) return;
     const q = 'removeFromClient=true&blocklist=false&skipRedownload=true';
     const res = await fetch(`${base}/api/v3/queue/bulk?${q}&apikey=${key}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: mine.map(r => r.id) }),
+      body: JSON.stringify({ ids: rows.map(r => r.id) }),
       signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) throw new Error(`queue delete ${res.status}`);
-  }
+  };
 
-  const stopped = await setMonitored({ tmdbId, type, monitored: false, season });
+  const extra = tv ? 'includeEpisode=true' : '';
+  const mine = (await wholeQueue(base, key, extra)).filter(wanted);
+  await kill(mine);
+
+  // Then sweep once more. Unmonitoring stops new searches, but a grab already
+  // in flight when it landed still reaches the queue a second or two later,
+  // and by then nothing is looking for it again to clean it up.
+  await new Promise(r => setTimeout(r, 3000));
+  const stragglers = (await wholeQueue(base, key, extra)).filter(wanted);
+  await kill(stragglers);
+
+  const all = [...mine, ...stragglers];
+  // A season pack is one torrent and twenty-three queue rows. Every row id has
+  // to go, but the releases are named once, because one is what was cancelled.
+  const releases = [...new Set(all.map(r => r.title).filter(Boolean))];
 
   return {
     tracked: true,
     title: found.title,
-    removed: mine.length,
+    removed: all.length,
+    straggled: stragglers.length,
     releases,
     unmonitored: stopped.changed,
   };
