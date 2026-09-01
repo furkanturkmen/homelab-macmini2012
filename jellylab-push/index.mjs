@@ -73,6 +73,25 @@ const send = (res, code, obj) => {
 };
 
 /**
+ * The JSON body of a small POST.
+ *
+ * Nothing this service accepts is large, so a body that grows past the cap is
+ * refused rather than buffered. Throws carrying the status to answer with.
+ */
+async function readJson(req, limit = 4096) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > limit) throw Object.assign(new Error('too large'), { status: 413 });
+  }
+  try {
+    return JSON.parse(body || '{}');
+  } catch {
+    throw Object.assign(new Error('invalid json'), { status: 400 });
+  }
+}
+
+/**
  * One page of a Sonarr or Radarr queue.
  *
  * Both are the same API with a different noun, so one function serves both.
@@ -764,6 +783,76 @@ async function setMonitored({ tmdbId, type, monitored, season }) {
   return { changed: touched > 0, title: found.title, touched };
 }
 
+/**
+ * Stop a download, and stop it coming back.
+ *
+ * Deleting a request in Jellyseerr does neither. The torrent goes on running
+ * in qBittorrent, the *arr imports it when it finishes, and a film lands in
+ * the library with no request explaining it - which is how Bio-Broly arrived.
+ *
+ * Removing the film from Radarr instead is worse, not better: Radarr forgets
+ * the queue row along with the film, and the torrent is left running with
+ * nothing tracking it at all. One orphaned JoJo download held 21 of 23 MB/s
+ * of the line that way, and was only found by looking in qBittorrent.
+ *
+ * So the queue goes first and explicitly, with:
+ *
+ *   removeFromClient  because a queue row disappearing is not the torrent
+ *                     stopping, and stopping it is the entire point;
+ *   skipRedownload    because otherwise the *arr reads the removal as a
+ *                     failed grab and immediately searches for a replacement,
+ *                     which is the cancel undoing itself;
+ *   blocklist=false   because the user is cancelling their own request, not
+ *                     reporting a bad release. A blocklisted release is
+ *                     invisible to everyone's later requests too.
+ *
+ * Then the season - or the film - is unmonitored, because an empty queue is
+ * not the same as nobody looking: RSS sync would grab it again within the
+ * hour. That is the half that makes this hold rather than merely pause.
+ */
+async function cancel({ tmdbId, type, season }) {
+  const tv = type === 'tv';
+  const key = tv ? SONARR_API_KEY : RADARR_API_KEY;
+  const base = tv ? SONARR_URL : RADARR_URL;
+  if (!key) throw new Error(`${tv ? 'sonarr' : 'radarr'} not configured`);
+
+  const found = await localId(base, key, tv ? 'series' : 'movie', tmdbId);
+  // Never tracked is a success, not a failure: there is nothing to stop.
+  if (!found) return { tracked: false, removed: 0, releases: [], unmonitored: false };
+
+  const rows = await wholeQueue(base, key, tv ? 'includeEpisode=true' : '');
+  const mine = rows.filter(r => {
+    if ((tv ? r.seriesId : r.movieId) !== found.id) return false;
+    if (!tv || season == null) return true;
+    return (r.seasonNumber ?? r.episode?.seasonNumber) === Number(season);
+  });
+
+  // A season pack is one torrent and twenty-three queue rows. Every row id has
+  // to go, but the releases are named once, because one is what was cancelled.
+  const releases = [...new Set(mine.map(r => r.title).filter(Boolean))];
+
+  if (mine.length) {
+    const q = 'removeFromClient=true&blocklist=false&skipRedownload=true';
+    const res = await fetch(`${base}/api/v3/queue/bulk?${q}&apikey=${key}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: mine.map(r => r.id) }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) throw new Error(`queue delete ${res.status}`);
+  }
+
+  const stopped = await setMonitored({ tmdbId, type, monitored: false, season });
+
+  return {
+    tracked: true,
+    title: found.title,
+    removed: mine.length,
+    releases,
+    unmonitored: stopped.changed,
+  };
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
 
@@ -978,17 +1067,11 @@ const server = createServer(async (req, res) => {
    * every call is reversed by the opposite call. The *arr API keys stay here.
    */
   if (url.pathname === '/monitor' && req.method === 'POST') {
-    let body = '';
-    for await (const chunk of req) {
-      body += chunk;
-      // Nothing legitimate is large; refuse rather than buffer.
-      if (body.length > 4096) return send(res, 413, { error: 'too large' });
-    }
     let parsed;
     try {
-      parsed = JSON.parse(body || '{}');
-    } catch {
-      return send(res, 400, { error: 'invalid json' });
+      parsed = await readJson(req);
+    } catch (err) {
+      return send(res, err.status ?? 400, { error: err.message });
     }
 
     const { tmdbId, type, monitored, season } = parsed;
@@ -1006,6 +1089,43 @@ const server = createServer(async (req, res) => {
         + ` (${out.changed ? `changed${out.touched ? `, ${out.touched} item(s)` : ''}` : out.reason})`);
       // A verdict for a title nobody is looking for any more is meaningless.
       VERDICTS.delete(`${type === 'tv' ? 'tv' : 'movie'}:${tmdbId}`);
+      return send(res, 200, out);
+    } catch (err) {
+      return send(res, 502, { error: err.message });
+    }
+  }
+
+  /**
+   * The second write. POST /cancel {tmdbId, type, season?}
+   *
+   * Unauthenticated like the rest of this service, and this one deserves the
+   * sentence the others get: it can delete a running download and its data
+   * from the client. It is reachable only from the LAN or the mesh, it can
+   * only touch a title the *arr already tracks, and it takes no path or id
+   * from the caller - just a TMDB id, which it resolves itself. It cannot
+   * grab, cannot blocklist, and cannot touch anything already imported.
+   */
+  if (url.pathname === '/cancel' && req.method === 'POST') {
+    let parsed;
+    try {
+      parsed = await readJson(req);
+    } catch (err) {
+      return send(res, err.status ?? 400, { error: err.message });
+    }
+
+    const { tmdbId, type, season } = parsed;
+    if (!tmdbId) return send(res, 400, { error: 'tmdbId required' });
+    const kind = type === 'tv' ? 'tv' : 'movie';
+
+    try {
+      const out = await cancel({ tmdbId, type: kind, season });
+      log(`cancel ${kind}:${tmdbId}${season != null ? ` S${season}` : ''} ->`
+        + (out.tracked
+          ? ` removed ${out.removed} queue row(s)${out.releases.length ? `: ${out.releases.join(', ')}` : ''}`
+            + `${out.unmonitored ? ', unmonitored' : ''}`
+          : ' not tracked'));
+      // Nothing anyone is still looking for, so the cached verdict is stale.
+      VERDICTS.delete(`${kind}:${tmdbId}`);
       return send(res, 200, out);
     } catch (err) {
       return send(res, 502, { error: err.message });
