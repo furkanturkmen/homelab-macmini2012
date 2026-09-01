@@ -29,3 +29,6 @@ gluetun/*
 Thumbs.db
 desktop.ini
 __pycache__/
+
+# whisper model cache - gigabytes, re-downloaded on demand
+whisper/
