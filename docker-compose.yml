@@ -8,6 +8,10 @@ services:
     container_name: pihole
     image: pihole/pihole:latest
     restart: unless-stopped
+    # FTL keeps its query index in /dev/shm. Docker's default is 64MB, and
+    # parsing 950k queries out of a 191MB database fills it, so FTL died and
+    # restarted 504 times - taking DNS for the whole network with it each time.
+    shm_size: 512m
     ports:
       - "${HOST_LAN_IP}:53:53/tcp"
       - "${HOST_LAN_IP}:53:53/udp"
