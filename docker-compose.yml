@@ -383,6 +383,10 @@ services:
       SONARR_API_KEY: "${SONARR_API_KEY}"
       RADARR_URL: "http://radarr:7878"
       RADARR_API_KEY: "${RADARR_API_KEY}"
+      # Jellyseerr's blocklist is global - it has no per-user content
+      # filtering - so only the everyone-filter can be mirrored there.
+      JELLYSEERR_URL: "http://jellyseerr:5055"
+      JELLYSEERR_API_KEY: "${JELLYSEERR_API_KEY}"
       # Sonarr and Radarr refresh their queues from qBittorrent once a minute,
       # so anything derived from them is up to a minute stale - over a gigabyte
       # at 20MB/s. Reading the client directly gives live progress and speed,
