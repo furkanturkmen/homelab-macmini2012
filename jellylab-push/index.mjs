@@ -970,59 +970,28 @@ const server = createServer(async (req, res) => {
   }
 
   /**
-   * Push the assignments out to the two systems that can enforce them.
+   * Make Jellyfin match what Jellyseerr says each person may not see.
    *
-   * Jellyfin takes per-user BlockedTags, so a filter assigned to one person
-   * holds for that person on every client. Jellyseerr takes a **global** tag
-   * blocklist and nothing per-user - its per-user settings are request quotas
-   * - so only the everyone-filter can be mirrored there. That is a limit of
-   * Jellyseerr, not a decision made here.
+   * Jellyseerr's per-user blockedTags is the only place this is decided, and
+   * the fork it runs is what makes that field exist. Everything else - the
+   * crawler's tag list, the markers on library items, every Jellyfin policy -
+   * is worked out from it here and stored nowhere, so removing a keyword from
+   * somebody in Jellyseerr removes it everywhere and nothing puts it back.
    *
-   * Jellyfin goes first and its failure is fatal, because that is the half
-   * that actually enforces anything. Jellyseerr failing is reported and does
-   * not undo the rest: a website still listing a title is worse than nothing,
-   * but far better than a library that stopped blocking it.
+   * That is the whole point of the arrangement: the app is a client for two
+   * servers rather than a third place where the truth lives.
    */
   if (url.pathname === '/filters/apply' && req.method === 'POST') {
     const token = req.headers['x-emby-token'];
     try {
       await filters.requireAdmin(token);
-      const doc = await filters.load();
-      /*
-       * Stamped before the policies are written, so that a user blocked on a
-       * marker this run is blocked on markers that already exist. The other
-       * order leaves a window where the policy names a tag nothing carries.
-       */
-      let stamp = null;
-      try {
-        stamp = await filters.stampLibrary(doc, token);
-        log(`library stamped: +${stamp.stamped.length} -${stamp.cleared.length}`
-          + ` against ${stamp.indexed} indexed title(s)`);
-      } catch (err) {
-        log(`library stamping FAILED: ${err.message}`);
-      }
-
-      const applied = await filters.applyToJellyfin(doc, token);
-      log(`filters applied to ${applied.length} jellyfin user(s)`);
-
-      let jellyseerr = null;
-      let jellyseerrError = null;
-      try {
-        jellyseerr = await filters.applyToJellyseerr(doc);
-        log(`filters -> jellyseerr: ${jellyseerr.applied.length} user(s) changed`
-          + `, ${jellyseerr.tags.length} tag(s) indexed`
-          + `${jellyseerr.crawlStarted ? ', crawl started' : ''}`);
-      } catch (err) {
-        jellyseerrError = err.message;
-        log(`filters -> jellyseerr FAILED: ${err.message}`);
-      }
-
-      return send(res, 200, {
-        applied,
-        ...(stamp ? { stamp } : {}),
-        ...(jellyseerr ? { jellyseerr } : {}),
-        ...(jellyseerrError ? { jellyseerrError } : {}),
-      });
+      const out = await filters.syncFromJellyseerr(token);
+      log(`sync: ${out.people.length} people, ${out.tags.length} tag(s)`
+        + `, library +${out.stamped.length} -${out.cleared.length}`
+        + `, ${out.applied.length} jellyfin policy change(s)`
+        + `${out.crawlStarted ? ', crawl started' : ''}`
+        + `${out.crawlBusy ? ', crawl already running' : ''}`);
+      return send(res, 200, out);
     } catch (err) {
       return send(res, err.status ?? 500, { error: err.message });
     }

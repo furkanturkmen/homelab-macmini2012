@@ -173,95 +173,6 @@ async function lastPushed() {
   }
 }
 
-/**
- * Push each person's filters into Jellyseerr, per user.
- *
- * Jellyseerr upstream has no per-user content filtering at all - its blocklist
- * is global and not one of its thirty permissions describes content - so this
- * used to be able to mirror only the everyone-filter, and even that took the
- * library away from the administrator. The instance this talks to is a fork
- * that adds `blockedTags` to a user's settings, which is why this can now say
- * "hidden from these people" rather than "hidden from everybody".
- *
- * Two writes per person, because Jellyseerr's settings route assigns username
- * and email straight out of the request body: posting only the tags would
- * blank both. So the current settings are read and posted back with the tags
- * changed, exactly as its own UI does.
- *
- * The global tag list is still maintained, but it means something different -
- * it is the crawler's shopping list. A title can only be hidden from anyone
- * once the crawler has indexed it under that tag, so the global list has to be
- * the union of everything anyone is filtered on.
- */
-export async function applyToJellyseerr(doc) {
-  if (!JELLYSEERR_API_KEY) {
-    throw Object.assign(new Error('jellyseerr api key not configured'), { status: 503 });
-  }
-
-  const users = (await seerr('/user?take=100')).results ?? [];
-  const applied = [];
-  const union = new Set();
-
-  for (const user of users) {
-    const tags = resolveFor(doc, user.jellyfinUserId ?? null)
-      .keywordIds.filter(Number.isInteger);
-    for (const id of tags) union.add(id);
-
-    const wanted = tags.join(',');
-    const current = await seerr(`/user/${user.id}/settings/main`);
-    if ((current.blockedTags ?? '') === wanted) continue;
-
-    await seerr(`/user/${user.id}/settings/main`, {
-      method: 'POST',
-      body: JSON.stringify({ ...current, blockedTags: wanted }),
-    });
-    applied.push({
-      user: user.displayName ?? user.jellyfinUsername ?? String(user.id),
-      tags,
-    });
-  }
-
-  // The crawler indexes what this names, and nothing else can ever be hidden.
-  const main = await seerr('/settings/main');
-  const existing = String(main.blocklistedTags ?? '')
-    .split(',')
-    .map(s => Number(s.trim()))
-    .filter(Number.isInteger);
-  const previous = await lastPushed();
-  const keep = existing.filter(id => !previous.includes(id));
-  const wanted = [...union];
-  const final = [...new Set([...keep, ...wanted])];
-
-  const limit = Number(main.blocklistedTagsLimit) || 50;
-  if (final.length > limit) {
-    throw Object.assign(
-      new Error(`jellyseerr allows ${limit} blocklisted tags, this would need ${final.length}`),
-      { status: 400 },
-    );
-  }
-
-  let crawled = false;
-  if (final.join(',') !== existing.join(',')) {
-    await seerr('/settings/main', {
-      method: 'POST',
-      body: JSON.stringify({ blocklistedTags: final.join(',') }),
-    });
-    // Only worth the crawl when the list actually changed - it walks TMDB
-    // discover for every tag across several sort orders.
-    try {
-      await seerr('/settings/jobs/process-blocklisted-tags/run', { method: 'POST' });
-      crawled = true;
-    } catch {
-      crawled = false;
-    }
-  }
-
-  await mkdir(dirname(SEERR_STATE), { recursive: true }).catch(() => {});
-  await writeFile(SEERR_STATE, JSON.stringify({ tags: wanted }), 'utf8');
-
-  return { applied, tags: final, crawlStarted: crawled };
-}
-
 /* ------------------------------------------------------------------ Jellyfin */
 
 async function jellyfin(path, token, init = {}) {
@@ -324,41 +235,90 @@ export async function requireAdmin(token) {
  * remove. Administrators are skipped - the person setting the rules is not the
  * one they are for.
  */
-/** The tag this service stamps on a library item for one filter. */
-const markerFor = (filterId) => `jellylab:${filterId}`;
+/**
+ * The tag stamped on a library item for one hidden keyword.
+ *
+ * Per keyword rather than per filter, because there are no filters any more:
+ * a person simply has a list of hidden TMDB keyword ids, and that list lives
+ * in Jellyseerr.
+ */
+const markerFor = (keywordId) => `jellylab:kw:${keywordId}`;
 
 /**
- * Stamp a marker tag onto every library item a filter covers.
+ * Everything this service has ever stamped, for recognising its own work.
  *
- * Jellyfin blocks by tag *name* on the items you own, and those names arrive
- * from whatever the metadata scraper happened to import. Jellyseerr matches
- * TMDB keyword *ids* against everything TMDB knows. The two agree until a
- * file is scraped thinly - and then a title is blocked in one place and not
- * the other, which is the worst possible answer.
- *
- * So Jellyfin stops depending on the scraper. Jellyseerr's blocklist already
- * says, by TMDB id, which titles carry which keywords; this finds the library
- * items with those ids and puts one marker tag on them. A user is then
- * blocked on that single marker rather than on six scraped keyword names.
- *
- * Jellyfin has no per-user, per-item blocklist, so a tag is the only lever
- * available - but it is an exact one, because membership is decided from
- * TMDB rather than from whatever the scraper wrote.
- *
- * The marker is re-stamped on every apply and is not locked, so a metadata
- * refresh that clears it is repaired by the next apply rather than needing
- * the Tags field frozen - which would stop real keywords arriving at all.
+ * Deliberately the bare prefix rather than `jellylab:kw:`. An earlier shape
+ * named markers after a filter - `jellylab:f1788…` - and those have to be
+ * recognised to be cleared, or they sit on the library for good.
  */
-export async function stampLibrary(doc, token) {
-  /*
-   * Reading one item needs the user-scoped route. `GET /Items/{id}` answers
-   * 400 on this server - it is the *update* endpoint - and the flat
-   * `/Items?ids=` form returns a trimmed record that the update then rejects.
-   * `GET /Users/{admin}/Items/{id}` returns the full 51-field DTO that
-   * `POST /Items/{id}` accepts, which is the pair the web UI itself uses.
-   */
-  const users = await jellyfin('/Users', token);
-  const admin = users.find(u => u?.Policy?.IsAdministrator);
+const MARKER_PREFIX = 'jellylab:';
+
+/**
+ * Make Jellyfin hide what Jellyseerr says each person may not see.
+ *
+ * Jellyseerr's per-user `blockedTags` is the only place any of this is
+ * decided. Nothing here is stored: the global crawl list, the tags on library
+ * items and every Jellyfin policy are worked out from that one field each
+ * time, so removing a keyword from somebody in Jellyseerr removes it
+ * everywhere and there is no second copy to put it back.
+ *
+ * The crawler still has to be told which keywords to index, because a title
+ * can only be hidden once it is known to carry the tag - so the global list is
+ * set to the union of what everybody is hidden from. That is derived, not
+ * configured.
+ *
+ * Jellyfin's own parental controls are left alone. An age cap belongs in
+ * Jellyfin's user settings, where it already exists, not mirrored from here.
+ */
+export async function syncFromJellyseerr(token) {
+  if (!JELLYSEERR_API_KEY) {
+    throw Object.assign(new Error('jellyseerr api key not configured'), { status: 503 });
+  }
+
+  /* ---------------------------------------------- what Jellyseerr decides */
+  const seerrUsers = (await seerr('/user?take=100')).results ?? [];
+  const byJellyfinId = new Map();
+  const union = new Set();
+  const people = [];
+
+  for (const u of seerrUsers) {
+    const settings = await seerr(`/user/${u.id}/settings/main`);
+    const ids = String(settings.blockedTags ?? '')
+      .split(',')
+      .map(s => Number(s.trim()))
+      .filter(id => Number.isInteger(id) && id > 0);
+    for (const id of ids) union.add(id);
+    if (u.jellyfinUserId) byJellyfinId.set(u.jellyfinUserId, ids);
+    people.push({ user: u.displayName ?? String(u.id), keywords: ids });
+  }
+
+  /* ------------------------------------- tell the crawler what to look for */
+  const main = await seerr('/settings/main');
+  const existing = String(main.blocklistedTags ?? '')
+    .split(',')
+    .map(s => Number(s.trim()))
+    .filter(id => Number.isInteger(id) && id > 0);
+  const wanted = [...union];
+
+  /* --------------------------------- which titles carry which keyword */
+  const carries = new Map();
+  const PAGE = 500;
+  for (let skip = 0; ; skip += PAGE) {
+    const res = await seerr(`/blocklist?take=${PAGE}&skip=${skip}&filter=blocklistedTags`);
+    const rows = res.results ?? [];
+    for (const row of rows) {
+      const tags = String(row.blocklistedTags ?? '')
+        .split(',')
+        .map(s => Number(s.trim()))
+        .filter(id => Number.isInteger(id) && id > 0);
+      if (tags.length) carries.set(Number(row.tmdbId), tags);
+    }
+    if (rows.length < PAGE) break;
+  }
+
+  /* ------------------------------------------ stamp the library to match */
+  const jfUsers = await jellyfin('/Users', token);
+  const admin = jfUsers.find(u => u?.Policy?.IsAdministrator);
   if (!admin) {
     throw Object.assign(new Error('no administrator to read the library as'), { status: 500 });
   }
@@ -368,110 +328,99 @@ export async function stampLibrary(doc, token) {
     token,
   );
 
-  // What Jellyseerr's crawler found, as tmdbId -> the keyword ids that matched.
-  const blocked = new Map();
-  if (JELLYSEERR_API_KEY) {
-    /*
-     * `filter` and `skip`, not `page`. That endpoint rejects `page` outright
-     * with a 400, and - the part that cost an hour - answers an unfiltered
-     * request with zero results while `filter=blocklistedTags` returns
-     * thousands. Reading the bare call and believing it is what sent me
-     * hunting a bug in the crawler that was working the whole time.
-     *
-     * blocklistedTags is the right filter here regardless: manual entries
-     * block everyone already and are no business of a per-filter marker.
-     */
-    const PAGE = 500;
-    for (let skip = 0; ; skip += PAGE) {
-      const res = await seerr(`/blocklist?take=${PAGE}&skip=${skip}&filter=blocklistedTags`);
-      const rows = res.results ?? [];
-      for (const row of rows) {
-        const tags = String(row.blocklistedTags ?? '')
-          .split(',')
-          .map(s => Number(s.trim()))
-          .filter(Number.isInteger);
-        if (tags.length) blocked.set(Number(row.tmdbId), tags);
-      }
-      if (rows.length < PAGE) break;
-    }
-  }
-
   const stamped = [];
   const cleared = [];
-
   for (const item of items.Items ?? []) {
     const tmdbId = Number(item.ProviderIds?.Tmdb);
-    const tags = Number.isInteger(tmdbId) ? blocked.get(tmdbId) ?? [] : [];
+    const tags = Number.isInteger(tmdbId) ? carries.get(tmdbId) ?? [] : [];
     const current = new Set(item.Tags ?? []);
 
-    // Every filter whose keywords this item actually carries.
-    const wanted = new Set();
-    for (const f of doc.filters ?? []) {
-      const ids = (f.keywords ?? []).map(k => k.id);
-      if (ids.some(id => tags.includes(id))) wanted.add(markerFor(f.id));
-    }
-
-    const ours = [...current].filter(t => String(t).startsWith('jellylab:'));
-    const toAdd = [...wanted].filter(t => !current.has(t));
-    const toRemove = ours.filter(t => !wanted.has(t));
+    const want = new Set(tags.filter(id => union.has(id)).map(markerFor));
+    const ours = [...current].filter(t => String(t).startsWith(MARKER_PREFIX));
+    const toAdd = [...want].filter(t => !current.has(t));
+    const toRemove = ours.filter(t => !want.has(t));
     if (!toAdd.length && !toRemove.length) continue;
 
-    const next = [...current].filter(t => !toRemove.includes(t)).concat(toAdd);
     // Jellyfin replaces the whole item on POST, so the full record goes back
-    // with only Tags changed. Anything less blanks the rest of the metadata.
+    // with only Tags changed. The user-scoped read is the one that returns it.
     const full = await jellyfin(`/Users/${admin.Id}/Items/${item.Id}`, token);
     await jellyfin(`/Items/${item.Id}`, token, {
       method: 'POST',
-      body: JSON.stringify({ ...full, Tags: next }),
+      body: JSON.stringify({
+        ...full,
+        Tags: [...current].filter(t => !toRemove.includes(t)).concat(toAdd),
+      }),
     });
-
     if (toAdd.length) stamped.push({ item: item.Name, tags: toAdd });
     if (toRemove.length) cleared.push({ item: item.Name, tags: toRemove });
   }
 
-  return { stamped, cleared, indexed: blocked.size };
-}
-
-export async function applyToJellyfin(doc, token) {
-  const users = await jellyfin('/Users', token);
+  /* ------------------------------------------- block the markers per user */
   const applied = [];
-  for (const u of users) {
+  for (const u of jfUsers) {
     if (u?.Policy?.IsAdministrator) continue;
-    const { filterIds, keywordNames, maxAge, blockUnrated } = resolveFor(doc, u.Id);
+    const ids = byJellyfinId.get(u.Id) ?? [];
+    const markers = ids.map(markerFor);
     /*
-     * Blocked on the markers this service stamps, plus the scraped keyword
-     * names as a belt-and-braces second line.
-     *
-     * The markers are exact: membership is decided from Jellyseerr's blocklist
-     * by TMDB id, so a thinly scraped file is caught anyway. The keyword names
-     * are kept because they cost nothing and still catch an item stamping has
-     * not reached yet - a title added since the last apply, or one whose
-     * marker a metadata refresh cleared.
+     * Only this service's markers are managed. Anything else an administrator
+     * blocked by hand in Jellyfin is left exactly where it is - and the age
+     * cap and unrated settings are not touched at all.
      */
-    const markers = filterIds.map(markerFor);
-    /*
-     * An unrated item carries no age, so an age cap alone lets it straight
-     * through - which is the wrong way round for the one setting whose whole
-     * job is caution. Movie and Series are the only kinds this library holds.
-     */
-    const policy = {
-      ...u.Policy,
-      BlockedTags: [...new Set([...markers, ...keywordNames])],
-      MaxParentalRating: maxAge,
-      BlockUnratedItems: blockUnrated ? ['Movie', 'Series'] : [],
-    };
+    const before = (u.Policy.BlockedTags ?? []);
+    const keep = before.filter(t => !String(t).startsWith(MARKER_PREFIX));
+    const next = [...new Set([...keep, ...markers])];
+    if (next.slice().sort().join('|') === before.slice().sort().join('|')) continue;
+
     await jellyfin(`/Users/${u.Id}/Policy`, token, {
       method: 'POST',
-      body: JSON.stringify(policy),
+      body: JSON.stringify({ ...u.Policy, BlockedTags: next }),
     });
-    applied.push({
-      user: u.Name,
-      id: u.Id,
-      markers,
-      blockedTags: keywordNames,
-      maxAge,
-      blockUnrated,
-    });
+    applied.push({ user: u.Name, markers });
   }
-  return applied;
+
+  /*
+   * The crawl goes last, on purpose.
+   *
+   * Its first act is to clear every tag-driven blocklist row and rebuild
+   * them, so triggering it before reading that list means stamping against
+   * an index that has just been emptied - which stamped nothing at all the
+   * first time this ran. Stamping uses the index as it stands; the crawl then
+   * refreshes it for next time.
+   */
+  let crawlStarted = false;
+  let crawlBusy = false;
+  if (wanted.slice().sort().join(',') !== existing.slice().sort().join(',')) {
+    const limit = Number(main.blocklistedTagsLimit) || 50;
+    if (wanted.length > limit) {
+      throw Object.assign(
+        new Error(`jellyseerr allows ${limit} blocklisted tags, this needs ${wanted.length}`),
+        { status: 400 },
+      );
+    }
+    await seerr('/settings/main', {
+      method: 'POST',
+      body: JSON.stringify({ blocklistedTags: wanted.join(',') }),
+    });
+    /*
+     * Never while one is already running. The job reads the tag list when it
+     * starts and writes it back when it finishes, so two overlapping runs end
+     * with the older one's copy winning - which silently dropped two tags
+     * whose titles were already indexed.
+     */
+    const jobs = await seerr('/settings/jobs');
+    if (jobs.find(j => j.id === 'process-blocklisted-tags')?.running) {
+      crawlBusy = true;
+    } else {
+      try {
+        await seerr('/settings/jobs/process-blocklisted-tags/run', { method: 'POST' });
+        crawlStarted = true;
+      } catch {
+        crawlStarted = false;
+      }
+    }
+  }
+
+
+  return { people, tags: wanted, crawlStarted, crawlBusy, stamped, cleared, applied };
 }
+
