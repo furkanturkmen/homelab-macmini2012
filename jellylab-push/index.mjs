@@ -995,9 +995,9 @@ const server = createServer(async (req, res) => {
       let jellyseerrError = null;
       try {
         jellyseerr = await filters.applyToJellyseerr(doc);
-        log(`filters -> jellyseerr: ${jellyseerr.tags.length} tag(s)`
-          + `, +${jellyseerr.added.length} -${jellyseerr.removed.length}`
-          + `${jellyseerr.jobStarted ? ', job started' : ', job NOT started'}`);
+        log(`filters -> jellyseerr: ${jellyseerr.applied.length} user(s) changed`
+          + `, ${jellyseerr.tags.length} tag(s) indexed`
+          + `${jellyseerr.crawlStarted ? ', crawl started' : ''}`);
       } catch (err) {
         jellyseerrError = err.message;
         log(`filters -> jellyseerr FAILED: ${err.message}`);
