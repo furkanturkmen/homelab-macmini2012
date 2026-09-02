@@ -140,6 +140,8 @@ export function resolveFor(doc, jellyfinUserId) {
   }
   return {
     filters: names,
+    /** the filter ids themselves, which is what a stamped marker is named for */
+    filterIds: [...wanted].filter(id => doc.filters.some(f => f.id === id)),
     keywordIds: [...keywordIds],
     keywordNames: [...keywordNames],
     genreIds: [...genreIds],
@@ -322,12 +324,131 @@ export async function requireAdmin(token) {
  * remove. Administrators are skipped - the person setting the rules is not the
  * one they are for.
  */
+/** The tag this service stamps on a library item for one filter. */
+const markerFor = (filterId) => `jellylab:${filterId}`;
+
+/**
+ * Stamp a marker tag onto every library item a filter covers.
+ *
+ * Jellyfin blocks by tag *name* on the items you own, and those names arrive
+ * from whatever the metadata scraper happened to import. Jellyseerr matches
+ * TMDB keyword *ids* against everything TMDB knows. The two agree until a
+ * file is scraped thinly - and then a title is blocked in one place and not
+ * the other, which is the worst possible answer.
+ *
+ * So Jellyfin stops depending on the scraper. Jellyseerr's blocklist already
+ * says, by TMDB id, which titles carry which keywords; this finds the library
+ * items with those ids and puts one marker tag on them. A user is then
+ * blocked on that single marker rather than on six scraped keyword names.
+ *
+ * Jellyfin has no per-user, per-item blocklist, so a tag is the only lever
+ * available - but it is an exact one, because membership is decided from
+ * TMDB rather than from whatever the scraper wrote.
+ *
+ * The marker is re-stamped on every apply and is not locked, so a metadata
+ * refresh that clears it is repaired by the next apply rather than needing
+ * the Tags field frozen - which would stop real keywords arriving at all.
+ */
+export async function stampLibrary(doc, token) {
+  /*
+   * Reading one item needs the user-scoped route. `GET /Items/{id}` answers
+   * 400 on this server - it is the *update* endpoint - and the flat
+   * `/Items?ids=` form returns a trimmed record that the update then rejects.
+   * `GET /Users/{admin}/Items/{id}` returns the full 51-field DTO that
+   * `POST /Items/{id}` accepts, which is the pair the web UI itself uses.
+   */
+  const users = await jellyfin('/Users', token);
+  const admin = users.find(u => u?.Policy?.IsAdministrator);
+  if (!admin) {
+    throw Object.assign(new Error('no administrator to read the library as'), { status: 500 });
+  }
+
+  const items = await jellyfin(
+    '/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=Tags,ProviderIds&Limit=5000',
+    token,
+  );
+
+  // What Jellyseerr's crawler found, as tmdbId -> the keyword ids that matched.
+  const blocked = new Map();
+  if (JELLYSEERR_API_KEY) {
+    /*
+     * `filter` and `skip`, not `page`. That endpoint rejects `page` outright
+     * with a 400, and - the part that cost an hour - answers an unfiltered
+     * request with zero results while `filter=blocklistedTags` returns
+     * thousands. Reading the bare call and believing it is what sent me
+     * hunting a bug in the crawler that was working the whole time.
+     *
+     * blocklistedTags is the right filter here regardless: manual entries
+     * block everyone already and are no business of a per-filter marker.
+     */
+    const PAGE = 500;
+    for (let skip = 0; ; skip += PAGE) {
+      const res = await seerr(`/blocklist?take=${PAGE}&skip=${skip}&filter=blocklistedTags`);
+      const rows = res.results ?? [];
+      for (const row of rows) {
+        const tags = String(row.blocklistedTags ?? '')
+          .split(',')
+          .map(s => Number(s.trim()))
+          .filter(Number.isInteger);
+        if (tags.length) blocked.set(Number(row.tmdbId), tags);
+      }
+      if (rows.length < PAGE) break;
+    }
+  }
+
+  const stamped = [];
+  const cleared = [];
+
+  for (const item of items.Items ?? []) {
+    const tmdbId = Number(item.ProviderIds?.Tmdb);
+    const tags = Number.isInteger(tmdbId) ? blocked.get(tmdbId) ?? [] : [];
+    const current = new Set(item.Tags ?? []);
+
+    // Every filter whose keywords this item actually carries.
+    const wanted = new Set();
+    for (const f of doc.filters ?? []) {
+      const ids = (f.keywords ?? []).map(k => k.id);
+      if (ids.some(id => tags.includes(id))) wanted.add(markerFor(f.id));
+    }
+
+    const ours = [...current].filter(t => String(t).startsWith('jellylab:'));
+    const toAdd = [...wanted].filter(t => !current.has(t));
+    const toRemove = ours.filter(t => !wanted.has(t));
+    if (!toAdd.length && !toRemove.length) continue;
+
+    const next = [...current].filter(t => !toRemove.includes(t)).concat(toAdd);
+    // Jellyfin replaces the whole item on POST, so the full record goes back
+    // with only Tags changed. Anything less blanks the rest of the metadata.
+    const full = await jellyfin(`/Users/${admin.Id}/Items/${item.Id}`, token);
+    await jellyfin(`/Items/${item.Id}`, token, {
+      method: 'POST',
+      body: JSON.stringify({ ...full, Tags: next }),
+    });
+
+    if (toAdd.length) stamped.push({ item: item.Name, tags: toAdd });
+    if (toRemove.length) cleared.push({ item: item.Name, tags: toRemove });
+  }
+
+  return { stamped, cleared, indexed: blocked.size };
+}
+
 export async function applyToJellyfin(doc, token) {
   const users = await jellyfin('/Users', token);
   const applied = [];
   for (const u of users) {
     if (u?.Policy?.IsAdministrator) continue;
-    const { keywordNames, maxAge, blockUnrated } = resolveFor(doc, u.Id);
+    const { filterIds, keywordNames, maxAge, blockUnrated } = resolveFor(doc, u.Id);
+    /*
+     * Blocked on the markers this service stamps, plus the scraped keyword
+     * names as a belt-and-braces second line.
+     *
+     * The markers are exact: membership is decided from Jellyseerr's blocklist
+     * by TMDB id, so a thinly scraped file is caught anyway. The keyword names
+     * are kept because they cost nothing and still catch an item stamping has
+     * not reached yet - a title added since the last apply, or one whose
+     * marker a metadata refresh cleared.
+     */
+    const markers = filterIds.map(markerFor);
     /*
      * An unrated item carries no age, so an age cap alone lets it straight
      * through - which is the wrong way round for the one setting whose whole
@@ -335,7 +456,7 @@ export async function applyToJellyfin(doc, token) {
      */
     const policy = {
       ...u.Policy,
-      BlockedTags: keywordNames,
+      BlockedTags: [...new Set([...markers, ...keywordNames])],
       MaxParentalRating: maxAge,
       BlockUnratedItems: blockUnrated ? ['Movie', 'Series'] : [],
     };
@@ -343,7 +464,14 @@ export async function applyToJellyfin(doc, token) {
       method: 'POST',
       body: JSON.stringify(policy),
     });
-    applied.push({ user: u.Name, id: u.Id, blockedTags: keywordNames, maxAge, blockUnrated });
+    applied.push({
+      user: u.Name,
+      id: u.Id,
+      markers,
+      blockedTags: keywordNames,
+      maxAge,
+      blockUnrated,
+    });
   }
   return applied;
 }
