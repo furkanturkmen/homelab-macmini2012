@@ -172,40 +172,62 @@ async function lastPushed() {
 }
 
 /**
- * Mirror the everyone-filter into Jellyseerr's own blocklist.
+ * Push each person's filters into Jellyseerr, per user.
  *
- * This is the gap named at the top of this file: blocked tags in Jellyfin hold
- * against every client, but Jellyseerr's web UI answers to none of that, so a
- * title filtered out of the app was still one search away on the website.
+ * Jellyseerr upstream has no per-user content filtering at all - its blocklist
+ * is global and not one of its thirty permissions describes content - so this
+ * used to be able to mirror only the everyone-filter, and even that took the
+ * library away from the administrator. The instance this talks to is a fork
+ * that adds `blockedTags` to a user's settings, which is why this can now say
+ * "hidden from these people" rather than "hidden from everybody".
  *
- * Only the assignment to EVERYONE is mirrored, and that is a limitation of
- * Jellyseerr rather than a choice. Its blocklist is a **global** setting -
- * `settings.main.blocklistedTags`, a comma-separated list of TMDB keyword ids
- * that a background job expands into blocklisted titles. Per-user settings
- * there carry request quotas and nothing else, so a filter assigned to one
- * person cannot be enforced on that website at all. Say so rather than
- * implying otherwise.
+ * Two writes per person, because Jellyseerr's settings route assigns username
+ * and email straight out of the request body: posting only the tags would
+ * blank both. So the current settings are read and posted back with the tags
+ * changed, exactly as its own UI does.
  *
- * What this last wrote is remembered, so unassigning a filter takes its tags
- * back out again while leaving alone any tag added by hand in Jellyseerr's own
- * settings. Replacing the list outright would silently discard those.
+ * The global tag list is still maintained, but it means something different -
+ * it is the crawler's shopping list. A title can only be hidden from anyone
+ * once the crawler has indexed it under that tag, so the global list has to be
+ * the union of everything anyone is filtered on.
  */
 export async function applyToJellyseerr(doc) {
   if (!JELLYSEERR_API_KEY) {
     throw Object.assign(new Error('jellyseerr api key not configured'), { status: 503 });
   }
 
-  const wanted = resolveFor(doc, null).keywordIds.filter(Number.isInteger);
-  const previous = await lastPushed();
+  const users = (await seerr('/user?take=100')).results ?? [];
+  const applied = [];
+  const union = new Set();
 
+  for (const user of users) {
+    const tags = resolveFor(doc, user.jellyfinUserId ?? null)
+      .keywordIds.filter(Number.isInteger);
+    for (const id of tags) union.add(id);
+
+    const wanted = tags.join(',');
+    const current = await seerr(`/user/${user.id}/settings/main`);
+    if ((current.blockedTags ?? '') === wanted) continue;
+
+    await seerr(`/user/${user.id}/settings/main`, {
+      method: 'POST',
+      body: JSON.stringify({ ...current, blockedTags: wanted }),
+    });
+    applied.push({
+      user: user.displayName ?? user.jellyfinUsername ?? String(user.id),
+      tags,
+    });
+  }
+
+  // The crawler indexes what this names, and nothing else can ever be hidden.
   const main = await seerr('/settings/main');
-  const current = String(main.blocklistedTags ?? '')
+  const existing = String(main.blocklistedTags ?? '')
     .split(',')
     .map(s => Number(s.trim()))
     .filter(Number.isInteger);
-
-  // Ours come out, theirs stay, then ours go back in as they are now.
-  const keep = current.filter(id => !previous.includes(id));
+  const previous = await lastPushed();
+  const keep = existing.filter(id => !previous.includes(id));
+  const wanted = [...union];
   const final = [...new Set([...keep, ...wanted])];
 
   const limit = Number(main.blocklistedTagsLimit) || 50;
@@ -216,41 +238,26 @@ export async function applyToJellyseerr(doc) {
     );
   }
 
-  /*
-   * Only the tag list is written. `hideBlocklisted` is deliberately left as
-   * the administrator set it, because it does not mean what its name suggests:
-   * a blocklisted title already cannot be requested by anyone, and this flag
-   * additionally hides those titles from the discover pages of people who
-   * *can* manage the blocklist - the administrator included. Turning it on
-   * from here would quietly take the library away from the person applying the
-   * filter.
-   */
-  await seerr('/settings/main', {
-    method: 'POST',
-    body: JSON.stringify({ blocklistedTags: final.join(',') }),
-  });
+  let crawled = false;
+  if (final.join(',') !== existing.join(',')) {
+    await seerr('/settings/main', {
+      method: 'POST',
+      body: JSON.stringify({ blocklistedTags: final.join(',') }),
+    });
+    // Only worth the crawl when the list actually changed - it walks TMDB
+    // discover for every tag across several sort orders.
+    try {
+      await seerr('/settings/jobs/process-blocklisted-tags/run', { method: 'POST' });
+      crawled = true;
+    } catch {
+      crawled = false;
+    }
+  }
 
   await mkdir(dirname(SEERR_STATE), { recursive: true }).catch(() => {});
   await writeFile(SEERR_STATE, JSON.stringify({ tags: wanted }), 'utf8');
 
-  // The blocklist itself is built by a scheduled job walking Discover for each
-  // tag, so without this the change lands whenever that next runs.
-  let jobStarted = true;
-  try {
-    await seerr('/settings/jobs/process-blocklisted-tags/run', { method: 'POST' });
-  } catch {
-    jobStarted = false;
-  }
-
-  return {
-    tags: final,
-    added: wanted.filter(id => !previous.includes(id)),
-    removed: previous.filter(id => !wanted.includes(id)),
-    kept: keep,
-    /** left as the administrator set it - see above */
-    hideBlocklisted: Boolean(main.hideBlocklisted),
-    jobStarted,
-  };
+  return { applied, tags: final, crawlStarted: crawled };
 }
 
 /* ------------------------------------------------------------------ Jellyfin */
