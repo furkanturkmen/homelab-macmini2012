@@ -988,6 +988,20 @@ const server = createServer(async (req, res) => {
     try {
       await filters.requireAdmin(token);
       const doc = await filters.load();
+      /*
+       * Stamped before the policies are written, so that a user blocked on a
+       * marker this run is blocked on markers that already exist. The other
+       * order leaves a window where the policy names a tag nothing carries.
+       */
+      let stamp = null;
+      try {
+        stamp = await filters.stampLibrary(doc, token);
+        log(`library stamped: +${stamp.stamped.length} -${stamp.cleared.length}`
+          + ` against ${stamp.indexed} indexed title(s)`);
+      } catch (err) {
+        log(`library stamping FAILED: ${err.message}`);
+      }
+
       const applied = await filters.applyToJellyfin(doc, token);
       log(`filters applied to ${applied.length} jellyfin user(s)`);
 
@@ -1005,6 +1019,7 @@ const server = createServer(async (req, res) => {
 
       return send(res, 200, {
         applied,
+        ...(stamp ? { stamp } : {}),
         ...(jellyseerr ? { jellyseerr } : {}),
         ...(jellyseerrError ? { jellyseerrError } : {}),
       });
