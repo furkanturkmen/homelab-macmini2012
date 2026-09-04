@@ -333,10 +333,22 @@ services:
     # global and none of its permissions describe content. Source and branch:
     # github.com/furkanturkmen/seerr feat/per-user-content-filters
     #
-    # Rebuild after a rebase, docker save | docker load, and bump the tag.
-    # To roll back, put ghcr.io/seerr-team/seerr:latest here: the migration
-    # only adds a column, which stock ignores, so no restore is needed.
-    image: seerr-fork:filters
+    # Rebuild after a rebase, then docker save | ssh homelab docker load, and
+    # bump the tag here:
+    #
+    #   docker build --build-arg COMMIT_TAG=local -t seerr-fork:<tag> .
+    #
+    # The build arg is not optional. Without it the server writes an empty
+    # committag.json while the client bakes in next.config's 'local' fallback,
+    # the two never agree, and every page load shows "Jellyseerr Updated,
+    # please reload" - which reloading cannot fix. 'local' rather than the
+    # upstream sha because this is a fork with its own commits, and a sha here
+    # also makes Jellyseerr ask GitHub how far behind upstream it is and say
+    # so, forever.
+    #
+    # To roll back, put ghcr.io/seerr-team/seerr:latest here: the migrations
+    # only add columns, which stock ignores, so no restore is needed.
+    image: seerr-fork:filters3
     restart: unless-stopped
     environment:
       LOG_LEVEL: info
