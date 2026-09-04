@@ -348,7 +348,7 @@ services:
     #
     # To roll back, put ghcr.io/seerr-team/seerr:latest here: the migrations
     # only add columns, which stock ignores, so no restore is needed.
-    image: seerr-fork:filters3
+    image: seerr-fork:filters4
     restart: unless-stopped
     environment:
       LOG_LEVEL: info
