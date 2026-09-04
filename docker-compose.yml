@@ -14,6 +14,21 @@ services:
     # FTL keeps its query index in /dev/shm. Docker's default is 64MB, and
     # parsing 950k queries out of a 191MB database fills it, so FTL died and
     # restarted 504 times - taking DNS for the whole network with it each time.
+    # 2026-09-05: pihole's conditional forwarding used to point at pihole.
+    # `revServers = ["true,192.168.68.0/24,192.168.68.59,lan"]` - .59 is this
+    # host, so every *.lan name pihole did not already hold, and every
+    # 192.168.68.x reverse lookup, was forwarded by pihole to pihole and round
+    # again. The loop ran at whatever dns.rateLimit allowed, which somebody had
+    # raised from 1000 to 20000 a minute, and 20,008 queries a minute is what
+    # filled /dev/shm three times and took DNS down with it. It is also why
+    # names like homarr.homelab.lan failed while *.internal worked: the loop
+    # only catches what is not in the 62 local records.
+    #
+    # Now points at the router. pihole.toml is gitignored, so the setting is
+    # only on the box - it is written down here because nothing else records it:
+    #   pihole-FTL --config dns.revServers '["true,192.168.68.0/24,192.168.68.1,lan"]'
+    #
+    # 512MB of shared memory is still needed; see the note on maxDBdays.
     shm_size: 512m
     ports:
       - "${HOST_LAN_IP}:53:53/tcp"
