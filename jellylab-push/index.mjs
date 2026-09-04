@@ -135,22 +135,53 @@ async function wholeQueue(base, key, extra) {
  * matching them up is the only reason this exists.
  */
 function byTmdbId(records, pick, live = {}) {
-  const out = {};
+  /*
+   * Group by download first, series second.
+   *
+   * The old rule was "largest row wins", which is right for a season pack -
+   * one torrent reported once per episode, every row carrying the whole size -
+   * and wrong for the other shape. Eight episodes grabbed as eight separate
+   * torrents are eight real downloads, and reporting the largest of them as
+   * the series' progress says 50% while seven are finished.
+   *
+   * downloadId is what tells the two apart: rows of one pack share a hash,
+   * separate torrents do not. So dedupe by hash, then add up what is left.
+   */
+  const byId = {};
   for (const r of records) {
-    const parent = pick(r);
-    const tmdbId = parent?.tmdbId;
+    const tmdbId = pick(r)?.tmdbId;
     if (!tmdbId) continue;
+    // A row with no downloadId cannot be grouped with anything, so it counts
+    // as its own download rather than silently merging with another.
+    const hash = (r.downloadId ?? '').toLowerCase() || `row:${r.id ?? Math.random()}`;
+    const m = byId[tmdbId] ?? (byId[tmdbId] = new Map());
+    const prev = m.get(hash);
+    if (!prev || (r.size ?? 0) > (prev.size ?? 0)) m.set(hash, r);
+  }
 
-    const size = r.size ?? 0;
-    const left = r.sizeleft ?? r.sizeLeft ?? 0;
+  const out = {};
+  for (const [tmdbId, m] of Object.entries(byId)) {
+    const rows = [...m.values()];
+    const left = rows.reduce((a, x) => a + (x.sizeleft ?? x.sizeLeft ?? 0), 0);
+    const size = rows.reduce((a, x) => a + (x.size ?? 0), 0);
+    /*
+     * The one still going, because that is what the title, the ETA and the
+     * stall reason should describe - the download you are waiting on, not
+     * whichever happens to be biggest. With everything finished it falls back
+     * to the largest, which is the one that mattered.
+     */
+    const r = rows.reduce((a, x) =>
+      ((x.sizeleft ?? x.sizeLeft ?? 0) > (a.sizeleft ?? a.sizeLeft ?? 0) ? x : a), rows[0]);
     const hash = (r.downloadId ?? '').toLowerCase();
-    const prev = out[tmdbId];
-    if (prev && prev.size >= size) continue;
 
     out[tmdbId] = {
       size,
       sizeLeft: left,
       percent: size > 0 ? Math.max(0, Math.min(1, (size - left) / size)) : null,
+      // How many separate downloads this series is arriving as. One for a
+      // season pack or a single episode; the app can say "8 files" rather
+      // than implying the bar describes one thing.
+      parts: rows.length,
       // Sonarr says "warning" for a stalled torrent and puts the reason in
       // errorMessage; that is worth showing, because a stalled download and a
       // slow one look identical from a percentage alone.
