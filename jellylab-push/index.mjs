@@ -1191,6 +1191,7 @@ setTimeout(sweepOne, 10000).unref();
 const FILTER_SYNC_MS = Number(process.env.FILTER_SYNC_MS) || 10 * 60 * 1000;
 const JELLYFIN_API_KEY = process.env.JELLYFIN_API_KEY || '';
 let filterSyncBusy = false;
+let filterSyncAgain = false;
 
 /*
  * One sync at a time, whoever asked for it.
@@ -1200,24 +1201,35 @@ let filterSyncBusy = false;
  * lifts the reading administrator's own filter while it stamps and restores
  * it at the end, so a second run starting in that window sees them unfiltered
  * and would record that as the truth.
+ *
+ * A request that arrives mid-run is queued rather than refused. Refusing it
+ * loses the change: the run in flight read everyone's settings before the flip
+ * happened, so it cannot carry it, and the caller would be told the sync
+ * "already ran" while the library kept the old answer until the next tick.
+ * Going round once more costs one pass and is always correct.
  */
 async function runFilterSync(token, why, quiet) {
   if (filterSyncBusy) {
-    throw Object.assign(new Error('a filter sync is already running'), { status: 409 });
+    filterSyncAgain = true;
+    return { queued: true };
   }
   filterSyncBusy = true;
   try {
-    const out = await filters.syncFromJellyseerr(token);
-    const changed = out.stamped.length + out.cleared.length + out.applied.length;
-    // On the timer, say nothing when there was nothing to do. Ten minutes of
-    // "no change" forever buries the lines that matter.
-    if (!quiet || changed || out.crawlStarted) {
-      log(`filter sync (${why}): ${out.people.length} people, ${out.tags.length} tag(s)`
-        + `, library +${out.stamped.length} -${out.cleared.length}`
-        + `, ${out.applied.length} jellyfin policy change(s)`
-        + `${out.crawlStarted ? ', crawl started' : ''}`
-        + `${out.crawlBusy ? ', crawl already running' : ''}`);
-    }
+    let out;
+    do {
+      filterSyncAgain = false;
+      out = await filters.syncFromJellyseerr(token);
+      const changed = out.stamped.length + out.cleared.length + out.applied.length;
+      // On the timer, say nothing when there was nothing to do. Ten minutes of
+      // "no change" forever buries the lines that matter.
+      if (!quiet || changed || out.crawlStarted) {
+        log(`filter sync (${why}): ${out.people.length} people, ${out.tags.length} tag(s)`
+          + `, library +${out.stamped.length} -${out.cleared.length}`
+          + `, ${out.applied.length} jellyfin policy change(s)`
+          + `${out.crawlStarted ? ', crawl started' : ''}`
+          + `${out.crawlBusy ? ', crawl already running' : ''}`);
+      }
+    } while (filterSyncAgain);
     return out;
   } finally {
     filterSyncBusy = false;
@@ -1229,8 +1241,7 @@ async function filterSyncTick() {
   try {
     await runFilterSync(JELLYFIN_API_KEY, 'timer', true);
   } catch (err) {
-    // A 409 here is the manual route holding the lock, which is not a fault.
-    if (err.status !== 409) log(`filter sync failed: ${err.message}`);
+    log(`filter sync failed: ${err.message}`);
   }
 }
 
