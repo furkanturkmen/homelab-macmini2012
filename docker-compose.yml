@@ -6,6 +6,9 @@ services:
 
   pihole:
     container_name: pihole
+    labels:
+      # Not updated unattended. See the comment on watchtower.
+      com.centurylinklabs.watchtower.enable: "false"
     image: pihole/pihole:latest
     restart: unless-stopped
     # FTL keeps its query index in /dev/shm. Docker's default is 64MB, and
@@ -28,6 +31,9 @@ services:
 
   nginx-proxy-manager:
     container_name: npm
+    labels:
+      # Not updated unattended. See the comment on watchtower.
+      com.centurylinklabs.watchtower.enable: "false"
     image: jc21/nginx-proxy-manager:latest
     restart: unless-stopped
     ports:
@@ -78,6 +84,15 @@ services:
       # Deliberately no docker.sock: the container-status widget is not worth
       # handing root on the host to a service that faces the browser.
 
+  # Updates every container to :latest at 04:00, which is how a routine
+  # restart became a network-wide outage on 2026-09-03: containers came back,
+  # DNS was briefly unavailable, something retried at 333 queries a second for
+  # six hours and drowned pihole - and with pihole down, nothing on the network
+  # resolved at all.
+  #
+  # So anything whose failure takes *other things* down is opted out with a
+  # com.centurylinklabs.watchtower.enable=false label and updated by hand. The
+  # ordinary applications still update themselves.
   watchtower:
     container_name: watchtower
     image: nickfedor/watchtower:latest
@@ -310,7 +325,18 @@ services:
 
   jellyseerr:
     container_name: jellyseerr
-    image: ghcr.io/seerr-team/seerr:latest
+    labels:
+      # Not updated unattended. See the comment on watchtower.
+      com.centurylinklabs.watchtower.enable: "false"
+    # Local build of seerr-team/seerr v3.4.1 (69f73a6f1486) plus per-user
+    # content filtering, which upstream has no notion of - its blocklist is
+    # global and none of its permissions describe content. Source and branch:
+    # github.com/furkanturkmen/seerr feat/per-user-content-filters
+    #
+    # Rebuild after a rebase, docker save | docker load, and bump the tag.
+    # To roll back, put ghcr.io/seerr-team/seerr:latest here: the migration
+    # only adds a column, which stock ignores, so no restore is needed.
+    image: seerr-fork:filters
     restart: unless-stopped
     environment:
       LOG_LEVEL: info
