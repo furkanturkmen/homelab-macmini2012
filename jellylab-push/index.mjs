@@ -985,12 +985,7 @@ const server = createServer(async (req, res) => {
     const token = req.headers['x-emby-token'];
     try {
       await filters.requireAdmin(token);
-      const out = await filters.syncFromJellyseerr(token);
-      log(`sync: ${out.people.length} people, ${out.tags.length} tag(s)`
-        + `, library +${out.stamped.length} -${out.cleared.length}`
-        + `, ${out.applied.length} jellyfin policy change(s)`
-        + `${out.crawlStarted ? ', crawl started' : ''}`
-        + `${out.crawlBusy ? ', crawl already running' : ''}`);
+      const out = await runFilterSync(token, 'requested', false);
       return send(res, 200, out);
     } catch (err) {
       return send(res, err.status ?? 500, { error: err.message });
@@ -1176,3 +1171,75 @@ server.listen(Number(PUSH_PORT), () => log(`listening on :${PUSH_PORT}`));
  */
 setInterval(sweepOne, 60000).unref();
 setTimeout(sweepOne, 10000).unref();
+
+/*
+ * Apply the content filters on a timer.
+ *
+ * Until now nothing did. The screen in the app that called /filters/apply was
+ * removed when the filters moved into Jellyseerr, so a change made there -
+ * an administrator editing someone's hidden tags, or anybody using their own
+ * adult switch - reached Jellyseerr immediately and the Jellyfin library
+ * never, until somebody remembered to POST this by hand. A filter that only
+ * applies when you remember it is not a filter.
+ *
+ * The service holds its own Jellyfin key for this, the way it already holds
+ * the *arr keys: the trigger cannot be a signed-in administrator, because the
+ * person whose setting changed usually is not one. Without the key it does
+ * nothing at all and the manual route still works, which is exactly the
+ * behaviour before this existed.
+ */
+const FILTER_SYNC_MS = Number(process.env.FILTER_SYNC_MS) || 10 * 60 * 1000;
+const JELLYFIN_API_KEY = process.env.JELLYFIN_API_KEY || '';
+let filterSyncBusy = false;
+
+/*
+ * One sync at a time, whoever asked for it.
+ *
+ * Two overlapping runs have gone wrong before - the older one finished last
+ * and wrote its stale tag list over the newer one's. It is worse now: a run
+ * lifts the reading administrator's own filter while it stamps and restores
+ * it at the end, so a second run starting in that window sees them unfiltered
+ * and would record that as the truth.
+ */
+async function runFilterSync(token, why, quiet) {
+  if (filterSyncBusy) {
+    throw Object.assign(new Error('a filter sync is already running'), { status: 409 });
+  }
+  filterSyncBusy = true;
+  try {
+    const out = await filters.syncFromJellyseerr(token);
+    const changed = out.stamped.length + out.cleared.length + out.applied.length;
+    // On the timer, say nothing when there was nothing to do. Ten minutes of
+    // "no change" forever buries the lines that matter.
+    if (!quiet || changed || out.crawlStarted) {
+      log(`filter sync (${why}): ${out.people.length} people, ${out.tags.length} tag(s)`
+        + `, library +${out.stamped.length} -${out.cleared.length}`
+        + `, ${out.applied.length} jellyfin policy change(s)`
+        + `${out.crawlStarted ? ', crawl started' : ''}`
+        + `${out.crawlBusy ? ', crawl already running' : ''}`);
+    }
+    return out;
+  } finally {
+    filterSyncBusy = false;
+  }
+}
+
+async function filterSyncTick() {
+  if (!JELLYFIN_API_KEY) return;
+  try {
+    await runFilterSync(JELLYFIN_API_KEY, 'timer', true);
+  } catch (err) {
+    // A 409 here is the manual route holding the lock, which is not a fault.
+    if (err.status !== 409) log(`filter sync failed: ${err.message}`);
+  }
+}
+
+if (JELLYFIN_API_KEY) {
+  setInterval(filterSyncTick, FILTER_SYNC_MS).unref();
+  // Not immediately: on a compose restart Jellyfin and Jellyseerr are coming
+  // up alongside this, and a sync that cannot read them just logs a failure.
+  setTimeout(filterSyncTick, 20000).unref();
+  log(`filter sync every ${Math.round(FILTER_SYNC_MS / 60000)} min`);
+} else {
+  log('filter sync idle: no JELLYFIN_API_KEY');
+}
