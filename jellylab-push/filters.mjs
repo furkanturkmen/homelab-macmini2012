@@ -370,15 +370,33 @@ export async function syncFromJellyseerr(token) {
    * A run that dies in between leaves the administrator seeing everything
    * until the next one. That is the wrong way round to fail and the safe one.
    */
-  const adminBlocked = admin.Policy.BlockedTags ?? [];
-  if (adminBlocked.some(t => String(t).startsWith(MARKER_PREFIX))) {
-    const keep = adminBlocked.filter(t => !String(t).startsWith(MARKER_PREFIX));
+  /*
+   * Lifted only if this run actually needs to read a blocked item, and not a
+   * moment sooner.
+   *
+   * Doing it up front cost a policy write on every single run - strip at the
+   * start, restore at the end - which on a ten minute timer meant the
+   * administrator's own filter blinking off and on all day, and a log line
+   * claiming a change every time. In the steady state nothing is restamped,
+   * so nothing needs reading, so their policy should not be touched at all.
+   *
+   * When it is needed the restore is still the policy pass at the end: the
+   * in-memory copy is updated here so that pass compares against what Jellyfin
+   * now holds rather than what it held when this started.
+   */
+  let librarianLifted = false;
+  const unfilterLibrarian = async () => {
+    if (librarianLifted) return;
+    librarianLifted = true;
+    const blocked = admin.Policy.BlockedTags ?? [];
+    if (!blocked.some(t => String(t).startsWith(MARKER_PREFIX))) return;
+    const keep = blocked.filter(t => !String(t).startsWith(MARKER_PREFIX));
     await jellyfin(`/Users/${admin.Id}/Policy`, token, {
       method: 'POST',
       body: JSON.stringify({ ...admin.Policy, BlockedTags: keep }),
     });
     admin.Policy.BlockedTags = keep;
-  }
+  };
 
   const items = await jellyfin(
     '/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=Tags,ProviderIds&Limit=5000',
@@ -399,7 +417,9 @@ export async function syncFromJellyseerr(token) {
     if (!toAdd.length && !toRemove.length) continue;
 
     // Jellyfin replaces the whole item on POST, so the full record goes back
-    // with only Tags changed. The user-scoped read is the one that returns it.
+    // with only Tags changed. The user-scoped read is the one that returns it -
+    // and it 404s for an item the reader's own policy blocks, hence this.
+    await unfilterLibrarian();
     const full = await jellyfin(`/Users/${admin.Id}/Items/${item.Id}`, token);
     await jellyfin(`/Items/${item.Id}`, token, {
       method: 'POST',

@@ -458,6 +458,10 @@ services:
       # filtering - so only the everyone-filter can be mirrored there.
       JELLYSEERR_URL: "http://jellyseerr:5055"
       JELLYSEERR_API_KEY: "${JELLYSEERR_API_KEY}"
+      # Its own Jellyfin key, so the content filters can be applied on a timer
+      # rather than only when an administrator is signed in and remembers to.
+      # The person whose setting changed is usually not an administrator.
+      JELLYFIN_API_KEY: "${JELLYFIN_API_KEY}"
       # Sonarr and Radarr refresh their queues from qBittorrent once a minute,
       # so anything derived from them is up to a minute stale - over a gigabyte
       # at 20MB/s. Reading the client directly gives live progress and speed,
