@@ -354,6 +354,23 @@ services:
       LOG_LEVEL: info
       TZ: "${TZ}"
       PORT: 5055
+      # ADULT_TAG_IDS would override which TMDB keywords the per-user "hide
+      # adult content" switch stands for, without a rebuild. Left unset, so
+      # the six in server/lib/adultTags apply.
+      #
+      # Dropping 195669 "ecchi" was tried on 2026-09-04 and reverted, because
+      # TMDB's keywords do not separate what it looks like they separate:
+      #
+      #   Adam's Sweet Agony  ecchi                             (hentai)
+      #   No Game No Life     ecchi                             (mainstream)
+      #   Mushoku Tensei      ecchi, erotic                     (mainstream)
+      #   On a Lustful Night  erotic
+      #   Overflow            softcore, ecchi, hentai, erotic
+      #
+      # The first two carry an identical keyword set, so no subset of the six
+      # hides one and shows the other - and Mushoku Tensei is held by erotic
+      # rather than ecchi anyway. Separating these needs a per-title exception,
+      # not a keyword change.
     volumes:
       - ./jellyseerr/config:/app/config
     ports:
