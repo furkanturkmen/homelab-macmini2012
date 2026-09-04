@@ -270,6 +270,21 @@ const MARKER_PREFIX = 'jellylab:';
  * Jellyfin's own parental controls are left alone. An age cap belongs in
  * Jellyfin's user settings, where it already exists, not mirrored from here.
  */
+/**
+ * A comma delimited list of keyword ids, as every side of this speaks it.
+ *
+ * Jellyseerr stores blocked tags as `12,34`, its settings endpoint answers
+ * with the same, and both need the same defensive parse - an empty string
+ * yields `Number('') === 0`, which passes Number.isInteger and would be
+ * carried around as keyword zero.
+ */
+function parseIds(raw) {
+  return String(raw ?? '')
+    .split(',')
+    .map(s => Number(s.trim()))
+    .filter(id => Number.isInteger(id) && id > 0);
+}
+
 export async function syncFromJellyseerr(token) {
   if (!JELLYSEERR_API_KEY) {
     throw Object.assign(new Error('jellyseerr api key not configured'), { status: 503 });
@@ -283,10 +298,23 @@ export async function syncFromJellyseerr(token) {
 
   for (const u of seerrUsers) {
     const settings = await seerr(`/user/${u.id}/settings/main`);
-    const ids = String(settings.blockedTags ?? '')
-      .split(',')
-      .map(s => Number(s.trim()))
-      .filter(id => Number.isInteger(id) && id > 0);
+    /*
+     * Two sources, one list.
+     *
+     * blockedTags is what an administrator imposed on this person. hideAdult
+     * is the person's own switch, and the fork answers with the keyword ids it
+     * stands for as adultTags - so this service does not keep a second copy of
+     * that list for the two to drift apart.
+     *
+     * Both go into the union below, and that matters more than it looks:
+     * the union is what the crawler is told to index, so a switch nobody is
+     * administratively filtered on still keeps its own keywords indexed. Left
+     * out, the switch would hide nothing the moment it was the only thing
+     * asking for those tags.
+     */
+    const imposed = parseIds(settings.blockedTags);
+    const chosen = settings.hideAdult ? parseIds(settings.adultTags) : [];
+    const ids = [...new Set([...imposed, ...chosen])];
     for (const id of ids) union.add(id);
     if (u.jellyfinUserId) byJellyfinId.set(u.jellyfinUserId, ids);
     people.push({ user: u.displayName ?? String(u.id), keywords: ids });
@@ -321,6 +349,35 @@ export async function syncFromJellyseerr(token) {
   const admin = jfUsers.find(u => u?.Policy?.IsAdministrator);
   if (!admin) {
     throw Object.assign(new Error('no administrator to read the library as'), { status: 500 });
+  }
+
+  /*
+   * The administrator the library is read as must not be filtered while we
+   * read it.
+   *
+   * Stamping has to send the whole item back, and the only call that returns
+   * the whole item is user scoped. So the moment that administrator's own
+   * policy blocks one of our markers, the read 404s for every item already
+   * carrying it and those items can never be restamped or cleared again -
+   * which only shows up once an administrator uses the adult switch on
+   * themselves, and then looks like the sync has stopped working.
+   *
+   * The markers come off here and the policy pass at the end, which runs after
+   * the stamping, puts back whatever they should have. Its in-memory copy is
+   * updated too: that pass compares against the policy it read at the start,
+   * and left stale it would see no difference and leave them unfiltered.
+   *
+   * A run that dies in between leaves the administrator seeing everything
+   * until the next one. That is the wrong way round to fail and the safe one.
+   */
+  const adminBlocked = admin.Policy.BlockedTags ?? [];
+  if (adminBlocked.some(t => String(t).startsWith(MARKER_PREFIX))) {
+    const keep = adminBlocked.filter(t => !String(t).startsWith(MARKER_PREFIX));
+    await jellyfin(`/Users/${admin.Id}/Policy`, token, {
+      method: 'POST',
+      body: JSON.stringify({ ...admin.Policy, BlockedTags: keep }),
+    });
+    admin.Policy.BlockedTags = keep;
   }
 
   const items = await jellyfin(
@@ -358,7 +415,16 @@ export async function syncFromJellyseerr(token) {
   /* ------------------------------------------- block the markers per user */
   const applied = [];
   for (const u of jfUsers) {
-    if (u?.Policy?.IsAdministrator) continue;
+    /*
+     * Administrators are no longer skipped.
+     *
+     * They were, so that a filter configured by mistake could not take the
+     * library away from the only person able to undo it. The adult switch
+     * changed that calculation: it is opt-in and set by the person it affects,
+     * and skipping them meant it did nothing at all for the account most
+     * likely to want it. An administrator who has asked for nothing resolves
+     * to an empty marker list, which leaves their policy exactly as it was.
+     */
     const ids = byJellyfinId.get(u.Id) ?? [];
     const markers = ids.map(markerFor);
     /*
