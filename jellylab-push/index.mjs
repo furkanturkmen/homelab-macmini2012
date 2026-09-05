@@ -78,6 +78,23 @@ const send = (res, code, obj) => {
  * Nothing this service accepts is large, so a body that grows past the cap is
  * refused rather than buffered. Throws carrying the status to answer with.
  */
+/**
+ * A plain text body, for the app's own log.
+ *
+ * Separate from readJson because a log is text and forcing it through JSON to
+ * be read is how logs become unreadable. The limit is generous by the
+ * standards of this file and small by the standards of a log: a thousand lines
+ * of the app's output is around a hundred kilobytes.
+ */
+async function readText(req, limit = 1_000_000) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > limit) throw Object.assign(new Error('too large'), { status: 413 });
+  }
+  return body;
+}
+
 async function readJson(req, limit = 4096) {
   let body = '';
   for await (const chunk of req) {
@@ -467,6 +484,9 @@ let sweeping = false;
  * exactly what happened twice while this service was being restarted.
  */
 const VERDICTS_PATH = process.env.VERDICTS_PATH || '/data/verdicts.json';
+// Where this service keeps what it is given, the app's logs included. Same
+// volume as everything else here, so it survives a recreate.
+const DATA_DIR = process.env.DATA_DIR || '/data';
 
 async function loadVerdicts() {
   try {
@@ -1012,6 +1032,41 @@ const server = createServer(async (req, res) => {
    * That is the whole point of the arrangement: the app is a client for two
    * servers rather than a third place where the truth lives.
    */
+  /*
+   * Take the app's own log and keep it where it can be read.
+   *
+   * A release build has no bundler, so everything the app prints goes to a
+   * console nothing is attached to. That is not a small gap: "subtitles
+   * stopped working" had to be diagnosed from nginx access logs and guesswork,
+   * because the lines saying which track was picked existed only on the phone.
+   *
+   * Any signed-in Jellyfin user may send one - it is their own diagnostics,
+   * and refusing everyone but administrators would mean the people most likely
+   * to hit a problem cannot report it. The token is checked against Jellyfin
+   * rather than trusted, and names the file, so a log says who it came from.
+   */
+  if (url.pathname === '/logs' && req.method === 'POST') {
+    const token = req.headers['x-emby-token'];
+    try {
+      if (!token) throw Object.assign(new Error('missing X-Emby-Token'), { status: 401 });
+      const me = await filters.whoAmI(token);
+      const text = await readText(req);
+      if (!text.trim()) return send(res, 400, { error: 'empty log' });
+
+      const dir = `${DATA_DIR}/app-logs`;
+      await mkdir(dir, { recursive: true });
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const who = String(me).replace(/[^A-Za-z0-9._-]/g, '_') || 'unknown';
+      const file = `${who}-${stamp}.log`;
+      await writeFile(`${dir}/${file}`, text, 'utf8');
+
+      log(`log from ${who}: ${text.length} bytes -> app-logs/${file}`);
+      return send(res, 200, { file, bytes: text.length });
+    } catch (err) {
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
   if (url.pathname === '/filters/apply' && req.method === 'POST') {
     const token = req.headers['x-emby-token'];
     try {

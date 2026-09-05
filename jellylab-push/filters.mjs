@@ -197,6 +197,26 @@ async function jellyfin(path, token, init = {}) {
  * than trusting a claim from the app is the whole point: these endpoints
  * change what other people in the house can see.
  */
+/**
+ * Who this token belongs to, according to Jellyfin.
+ *
+ * Weaker than requireAdmin on purpose: some things - sending your own logs -
+ * are every user's to do, and the question is only whether the token is real.
+ * A Jellyfin API key has no user behind it and answers 400 to /Users/Me, so it
+ * is named for what it is rather than rejected.
+ */
+export async function whoAmI(token) {
+  if (!token) throw Object.assign(new Error('missing X-Emby-Token'), { status: 401 });
+  try {
+    const me = await jellyfin('/Users/Me', token);
+    if (me?.Name) return me.Name;
+  } catch (e) {
+    if (e.status !== 400) throw Object.assign(new Error('not a valid token'), { status: 401 });
+  }
+  await requireAdmin(token);
+  return 'api-key';
+}
+
 export async function requireAdmin(token) {
   if (!token) throw Object.assign(new Error('missing X-Emby-Token'), { status: 401 });
 
