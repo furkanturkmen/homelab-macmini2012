@@ -179,7 +179,11 @@ async function jellyfin(path, token, init = {}) {
   const res = await fetch(`${JELLYFIN_URL}${path}`, {
     ...init,
     headers: {
-      'X-Emby-Token': token,
+      // Jellyfin 12 stopped reading X-Emby-Token and answers 401 to it, which
+      // showed up here as "filter sync failed: jellyfin /Users: 401" while
+      // everything else looked healthy. The standard Authorization header
+      // carries the same token and older servers accept it too.
+      Authorization: `MediaBrowser Client="jellylab-push", Device="homelab", DeviceId="jellylab-push", Version="1", Token="${token}"`,
       'Content-Type': 'application/json',
       ...(init.headers ?? {}),
     },
