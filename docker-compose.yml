@@ -573,6 +573,11 @@ services:
       # Shared with seerr-guard, which sends filter changes made through Seerr's
       # settings API here. jellylab-push is the only writer of the filter store.
       FILTER_STORE_SECRET: "${FILTER_STORE_SECRET}"
+      # Networks the filter page (/filters/admin) answers on. Home networks by
+      # default. A device that reaches the Mac Mini through a mesh VPN even at
+      # home arrives with its VPN address, so list such devices individually in
+      # .env rather than opening the whole VPN range.
+      ADMIN_NETWORKS: "${FILTER_PAGE_NETWORKS:-192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.1/32}"
       # Sonarr and Radarr refresh their queues from qBittorrent once a minute,
       # so anything derived from them is up to a minute stale - over a gigabyte
       # at 20MB/s. Reading the client directly gives live progress and speed,
