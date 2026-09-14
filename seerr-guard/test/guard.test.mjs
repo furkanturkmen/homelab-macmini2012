@@ -290,6 +290,19 @@ test('settings shim answers the fork fields and applies the fork permission rule
   assert.deepEqual(seen.pushPuts.at(-1).changes, { blockedTags: [5, 6], name: 'talha' });
 });
 
+test('no store file at all means nobody is filtered, and the canary says so', async () => {
+  await rm(storePath);
+  await new Promise((r) => setTimeout(r, 120));
+  const kid = await get('/api/v1/movie/100', as('kid'));
+  assert.equal(kid.status, 200, 'a stack that never set up filters is not locked out');
+  const canary = await get('/__guard/canary');
+  assert.equal(canary.status, 500);
+  assert.match(await canary.text(), /no canary configured/, 'where filters are used, the missing file turns the monitor red');
+  await writeFile(storePath, JSON.stringify(baseStore()));
+  await new Promise((r) => setTimeout(r, 120));
+  assert.equal((await get('/api/v1/movie/100', as('kid'))).status, 404, 'filters apply again as soon as the file is back');
+});
+
 test('a broken store withholds content from filterable people but not from admins', async () => {
   await writeFile(storePath, '{ this is not json');
   await new Promise((r) => setTimeout(r, 120));
