@@ -16,6 +16,7 @@ jellylab-push-data/
 gluetun/*
 !gluetun/update-qbit-port.sh
 7dtd/
+homarr/
 *.env
 .env
 !.env.example
