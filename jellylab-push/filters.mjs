@@ -524,7 +524,12 @@ export async function syncContentFilters(token) {
     '/Items?Recursive=true&IncludeItemTypes=Movie,Series&Fields=Tags,ProviderIds&Limit=10000',
     token,
   );
+  // Jellyfin returns collections (BoxSet) for this query too, whatever
+  // IncludeItemTypes says. Their TMDB id is a collection id, which Seerr's movie
+  // endpoint answers with an error, so they are left out rather than counted as
+  // a failed lookup on every run.
   const library = (items.Items ?? [])
+    .filter(item => item.Type === 'Movie' || item.Type === 'Series')
     .map(item => ({ item, tmdbId: Number(item.ProviderIds?.Tmdb), mediaType: item.Type === 'Series' ? 'tv' : 'movie' }))
     .filter(x => Number.isInteger(x.tmdbId) && x.tmdbId > 0);
 

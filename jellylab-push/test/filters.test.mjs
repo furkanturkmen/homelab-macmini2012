@@ -28,6 +28,7 @@ const ITEMS = [
   { Id: 'i200', Name: 'Clean film', Type: 'Movie', ProviderIds: { Tmdb: '200' }, Tags: ['jellylab:kw:5'] },
   { Id: 'i300', Name: 'Lookup fails', Type: 'Series', ProviderIds: { Tmdb: '300' }, Tags: ['jellylab:kw:5'] },
   { Id: 'i400', Name: 'No TMDB id', Type: 'Movie', ProviderIds: {}, Tags: [] },
+  { Id: 'i500', Name: 'Some Collection', Type: 'BoxSet', ProviderIds: { Tmdb: '263' }, Tags: [] },
 ];
 const KEYWORDS = { 'movie:100': [5, 9], 'movie:200': [7] };
 
@@ -146,6 +147,7 @@ test('sync stamps by keyword, blocks per person, and never unhides on a failed l
   assert.deepEqual(byItem.i200, [], 'no longer carries a hidden keyword, stale marker cleared');
   assert.equal('i300' in byItem, false, 'lookup failed: its existing marker is left alone');
   assert.equal('i400' in byItem, false, 'no TMDB id: not touched');
+  assert.equal('i500' in byItem, false, 'a collection is not a title: not looked up, not touched');
   assert.equal(writes.items.find((w) => w.id === 'i100').item.Overview, 'kept', 'the full item goes back, not just Tags');
 
   const byUser = Object.fromEntries(writes.policies.map((w) => [w.id, w.policy.BlockedTags]));
