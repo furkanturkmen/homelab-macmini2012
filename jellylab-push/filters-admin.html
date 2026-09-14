@@ -65,14 +65,14 @@
 
     <div class="card" id="editor" hidden>
       <strong id="editing"></strong>
-      <label>Hidden keywords</label>
+      <label>Hidden keywords <span class="muted" style="font-weight:400">(set by an administrator; the person cannot remove these)</span></label>
       <div class="chips" id="chips"></div>
       <label for="search">Add a keyword</label>
       <input id="search" type="search" placeholder="e.g. gore, sexual content…" autocomplete="off">
       <ul class="results" id="results"></ul>
       <div class="switch">
         <input type="checkbox" id="adult">
-        <label for="adult" style="margin:0;font-weight:500">Also hide adult content <span class="muted">(the fixed adult keyword list)</span></label>
+        <label for="adult" style="margin:0;font-weight:500">Also hide adult content <span class="muted">(the fixed adult keyword list). This is the person's own switch: they can turn it off again in the JellyLab app. Keywords above can only be changed here.</span></label>
       </div>
       <div class="row" style="margin-top:14px">
         <button id="save">Save</button>
@@ -151,7 +151,7 @@
       const badge = document.createElement('span');
       badge.className = 'badge';
       const n = entry.blockedTags.length;
-      badge.textContent = [n ? n + ' keyword' + (n === 1 ? '' : 's') : '', entry.hideAdult ? 'adult off' : '', p.isAdmin ? 'admin' : ''].filter(Boolean).join(' · ');
+      badge.textContent = [n ? n + ' keyword' + (n === 1 ? '' : 's') : '', entry.hideAdult ? 'adult hidden' : '', p.isAdmin ? 'admin' : ''].filter(Boolean).join(' · ');
       b.append(badge);
       b.addEventListener('click', () => select(p.id));
       box.append(b);
