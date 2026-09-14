@@ -1540,6 +1540,11 @@ jellylab-push ──> Seerr directly (API key) ──> Jellyfin BlockedTags, per
 - A hidden title's page, its page data and its API answer **404**, even when the
   URL is typed in by hand.
 - A request or watchlist add for a hidden title is refused.
+- Nothing personal is ever cached: API answers and pages go out without ETag or
+  Last-Modified and marked `no-store`, and a device's revalidation headers are
+  not forwarded. Without that, a phone or browser used earlier by an unfiltered
+  person revalidated its cached copy, Seerr answered 304, and the filtered
+  person saw the unfiltered results. The canary checks this case too.
 - In Jellyfin, `jellylab-push` stamps each title with `jellylab:kw:<keyword>`
   tags and puts each person's markers in their **BlockedTags**. Jellyfin then
   hides those titles in every client.
