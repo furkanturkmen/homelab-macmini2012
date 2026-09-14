@@ -21,6 +21,8 @@ wg-relay/
 dnscrypt-proxy/cache/
 *.env
 .env
+# backups taken before editing .env hold the same secrets
+.env.bak*
 !.env.example
 *.secret
 
