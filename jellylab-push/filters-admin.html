@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Content filters</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2230; --muted:#667085; --line:#e4e7ec; --accent:#6d4aff; --danger:#c0362c; --ok:#1f7a4d; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11141b; --card:#1a1f2a; --ink:#e8eaf0; --muted:#98a2b3; --line:#2a3140; --accent:#9b87ff; --danger:#ff7a6e; --ok:#5fd39a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); padding:24px 16px; }
+  main { max-width:760px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p.lead { color:var(--muted); margin:0 0 20px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-weight:600; margin:10px 0 4px; }
+  input[type=text], input[type=password], input[type=search] { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--ink); font:inherit; }
+  button { font:inherit; border:0; border-radius:8px; padding:9px 14px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  button:disabled { opacity:.55; cursor:default; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .people { display:flex; flex-wrap:wrap; gap:8px; }
+  .person { background:transparent; color:var(--ink); border:1px solid var(--line); }
+  .person[aria-pressed=true] { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+  .badge { font-size:12px; color:var(--muted); margin-left:6px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; min-height:34px; padding:4px 0; }
+  .chip { display:inline-flex; align-items:center; gap:6px; background:var(--bg); border:1px solid var(--line); border-radius:999px; padding:4px 6px 4px 11px; }
+  .chip button { background:transparent; color:var(--muted); padding:0 6px; font-size:16px; line-height:1; }
+  .results { list-style:none; margin:6px 0 0; padding:0; max-height:220px; overflow:auto; }
+  .results li button { width:100%; text-align:left; background:transparent; color:var(--ink); border-radius:6px; padding:7px 9px; }
+  .results li button:hover { background:var(--bg); }
+  .switch { display:flex; gap:10px; align-items:flex-start; margin-top:12px; }
+  .switch input { margin-top:4px; }
+  .muted { color:var(--muted); }
+  .status { min-height:22px; margin-top:10px; }
+  .status.error { color:var(--danger); }
+  .status.ok { color:var(--ok); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Content filters</h1>
+  <p class="lead">Choose which TMDB keywords are hidden from each person. Hidden titles disappear from Seerr and Jellyfin for them.</p>
+
+  <section class="card" id="login">
+    <form id="login-form">
+      <label for="u">Jellyfin administrator</label>
+      <input id="u" type="text" autocomplete="username" required>
+      <label for="p">Password</label>
+      <input id="p" type="password" autocomplete="current-password" required>
+      <div class="row" style="margin-top:12px"><button type="submit">Sign in</button></div>
+      <div class="status" id="login-status" role="status"></div>
+    </form>
+  </section>
+
+  <section id="app" hidden>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>Who</strong>
+        <span class="muted" id="signed-in"></span>
+      </div>
+      <div class="people" id="people" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="editor" hidden>
+      <strong id="editing"></strong>
+      <label>Hidden keywords</label>
+      <div class="chips" id="chips"></div>
+      <label for="search">Add a keyword</label>
+      <input id="search" type="search" placeholder="e.g. gore, sexual content…" autocomplete="off">
+      <ul class="results" id="results"></ul>
+      <div class="switch">
+        <input type="checkbox" id="adult">
+        <label for="adult" style="margin:0;font-weight:500">Also hide adult content <span class="muted">(the fixed adult keyword list)</span></label>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button id="save">Save</button>
+        <button class="ghost" id="revert">Undo changes</button>
+      </div>
+      <div class="status" id="save-status" role="status"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = { token: sessionStorage.getItem('filters-token'), name: sessionStorage.getItem('filters-name'), doc: null, people: [], names: {}, person: null, draft: null };
+
+  const status = (el, text, kind) => { el.textContent = text || ''; el.className = 'status' + (kind ? ' ' + kind : ''); };
+
+  async function api(path, options = {}) {
+    const res = await fetch(path, { ...options, headers: { 'content-type': 'application/json', ...(state.token ? { 'x-emby-token': state.token } : {}), ...(options.headers || {}) } });
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401 && state.token && path !== '/filters/login') { signOut(); throw new Error('Signed out. Please sign in again.'); }
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    return body;
+  }
+
+  function signOut() {
+    sessionStorage.removeItem('filters-token');
+    sessionStorage.removeItem('filters-name');
+    state.token = null;
+    $('app').hidden = true;
+    $('login').hidden = false;
+  }
+
+  $('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    status($('login-status'), 'Signing in…');
+    try {
+      const out = await api('/filters/login', { method: 'POST', body: JSON.stringify({ username: $('u').value, password: $('p').value }) });
+      state.token = out.token; state.name = out.name;
+      sessionStorage.setItem('filters-token', out.token);
+      sessionStorage.setItem('filters-name', out.name);
+      $('p').value = '';
+      status($('login-status'), '');
+      await load();
+    } catch (err) {
+      status($('login-status'), err.message, 'error');
+    }
+  });
+
+  async function load() {
+    const { doc, people } = await api('/filters/content');
+    state.doc = doc;
+    state.people = people;
+    const ids = Object.values(doc.users).flatMap((u) => u.blockedTags);
+    if (ids.length) Object.assign(state.names, await api('/filters/keyword-names?ids=' + ids.join(',')));
+    $('login').hidden = true;
+    $('app').hidden = false;
+    $('signed-in').textContent = 'Signed in as ' + state.name;
+    renderPeople();
+    if (state.person) select(state.person);
+  }
+
+  function entryFor(id) {
+    return state.doc.users[id] || { blockedTags: [], hideAdult: false };
+  }
+
+  function renderPeople() {
+    const box = $('people');
+    box.replaceChildren();
+    for (const p of state.people) {
+      const entry = entryFor(p.id);
+      const b = document.createElement('button');
+      b.className = 'person';
+      b.setAttribute('aria-pressed', String(state.person === p.id));
+      b.textContent = p.name;
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      const n = entry.blockedTags.length;
+      badge.textContent = [n ? n + ' keyword' + (n === 1 ? '' : 's') : '', entry.hideAdult ? 'adult off' : '', p.isAdmin ? 'admin' : ''].filter(Boolean).join(' · ');
+      b.append(badge);
+      b.addEventListener('click', () => select(p.id));
+      box.append(b);
+    }
+  }
+
+  function select(id) {
+    const person = state.people.find((p) => p.id === id);
+    if (!person) return;
+    state.person = id;
+    const entry = entryFor(id);
+    state.draft = { blockedTags: [...entry.blockedTags], hideAdult: entry.hideAdult };
+    $('editing').textContent = 'Filter for ' + person.name;
+    $('editor').hidden = false;
+    $('search').value = '';
+    $('results').replaceChildren();
+    status($('save-status'), '');
+    renderPeople();
+    renderDraft();
+  }
+
+  function renderDraft() {
+    const chips = $('chips');
+    chips.replaceChildren();
+    if (!state.draft.blockedTags.length) {
+      const none = document.createElement('span');
+      none.className = 'muted';
+      none.textContent = 'Nothing hidden.';
+      chips.append(none);
+    }
+    for (const id of state.draft.blockedTags) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.append(document.createTextNode(state.names[id] || '#' + id));
+      const x = document.createElement('button');
+      x.setAttribute('aria-label', 'Remove');
+      x.textContent = '×';
+      x.addEventListener('click', () => { state.draft.blockedTags = state.draft.blockedTags.filter((t) => t !== id); renderDraft(); });
+      chip.append(x);
+      chips.append(chip);
+    }
+    $('adult').checked = state.draft.hideAdult;
+  }
+
+  let searchTimer = null;
+  $('search').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const q = $('search').value.trim();
+    if (q.length < 2) { $('results').replaceChildren(); return; }
+    searchTimer = setTimeout(async () => {
+      try {
+        const found = await api('/filters/keywords?query=' + encodeURIComponent(q));
+        const list = $('results');
+        list.replaceChildren();
+        for (const k of found.slice(0, 30)) {
+          state.names[k.id] = k.name;
+          const li = document.createElement('li');
+          const b = document.createElement('button');
+          b.textContent = k.name + (state.draft.blockedTags.includes(k.id) ? '  ✓' : '');
+          b.addEventListener('click', () => {
+            if (!state.draft.blockedTags.includes(k.id)) state.draft.blockedTags.push(k.id);
+            renderDraft();
+            b.textContent = k.name + '  ✓';
+          });
+          li.append(b);
+          list.append(li);
+        }
+      } catch (err) {
+        status($('save-status'), err.message, 'error');
+      }
+    }, 300);
+  });
+
+  $('adult').addEventListener('change', () => { state.draft.hideAdult = $('adult').checked; });
+  $('revert').addEventListener('click', () => select(state.person));
+
+  $('save').addEventListener('click', async () => {
+    const person = state.people.find((p) => p.id === state.person);
+    $('save').disabled = true;
+    status($('save-status'), 'Saving…');
+    try {
+      const entry = await api('/filters/content/' + encodeURIComponent(state.person), {
+        method: 'PUT',
+        body: JSON.stringify({ ...state.draft, name: person.name }),
+      });
+      if (entry.blockedTags.length || entry.hideAdult) state.doc.users[state.person] = entry;
+      else delete state.doc.users[state.person];
+      renderPeople();
+      status($('save-status'), 'Saved. Seerr applies it straight away; Jellyfin within a few minutes.', 'ok');
+    } catch (err) {
+      status($('save-status'), err.message, 'error');
+    } finally {
+      $('save').disabled = false;
+    }
+  });
+
+  if (state.token) load().catch((err) => { signOut(); status($('login-status'), err.message, 'error'); });
+})();
+</script>
+</body>
+</html>
