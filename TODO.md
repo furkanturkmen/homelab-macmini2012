@@ -1163,11 +1163,134 @@ curl -s -X POST -H "X-Api-Key: $SK" http://localhost:8989/api/v3/history/failed/
 
 ---
 
+## Phase 10 — Optional: public links for friends, through a relay VPS
+
+**Skip this phase if Netbird (Phase 5) does what you need.** Netbird stays the
+way you and anyone you install it for reach the whole homelab. This phase adds
+something Netbird cannot: a normal `https://` address that family and friends
+open in a browser or the Jellyfin app, with nothing to install. The two run
+side by side.
+
+> **Status:** Steps 10.1–10.4 are built and verified. Certificates, the npm
+> proxy hosts and the Jellyfin/Seerr proxy settings are still being set up and
+> will be written up here once they work.
+
+### Why a relay VPS and not the alternatives
+
+| Option | What your ISP sees | Catch |
+|--------|--------------------|-------|
+| Netbird only (Phase 5) | an encrypted mesh | every viewer needs the Netbird app |
+| Open port 443 at home | every visitor's IP, the hostname, how much you stream | your home IP is public in DNS |
+| Cloudflare Tunnel | traffic to Cloudflare | Cloudflare decrypts everything, and its terms do not allow streaming video |
+| **Relay VPS** | **one WireGuard flow to the VPS** | a small monthly cost |
+
+The VPS never runs Jellyfin and never holds a certificate. It reads the
+requested hostname from each TLS handshake and passes the still-encrypted
+connection down a WireGuard tunnel that the homelab opened outwards. Nothing is
+forwarded on the home router.
+
+```
+friend ──https──> VPS :443 ──WireGuard──> wg-relay ──> relay-forward ──> npm ──> jellyfin
+                  (reads SNI only)         (home, outbound tunnel)
+at home: Pi-hole answers the same name with the LAN IP, so home traffic stays home
+```
+
+The bottleneck is not the VPS: the smallest plan relays far more than one old
+iGPU can transcode. Pick by price, not specs.
+
+### Step 10.1 — Rent the VPS
+
+Requirements: **KVM** virtualisation (container-based VPSes often cannot load
+WireGuard), a **dedicated IPv4**, and Ubuntu LTS. The cheapest tier of most EU
+hosts is enough.
+
+Log in with a key only. If the provider's install form takes a public key,
+paste it there.
+
+> ⚠️ **A web form can silently corrupt a pasted key.** One provider's form
+> inserted a space in the middle of the key, and the result was a plain
+> `Permission denied (publickey)` with no other hint. If that happens and your
+> keys are on GitHub, log in once through the provider's web console and run
+> `ssh-import-id gh:<your-github-user>`. It fetches the keys directly.
+
+### Step 10.2 — Harden the VPS and install the pieces
+
+```bash
+apt update && apt upgrade -y
+apt install -y wireguard-tools nginx libnginx-mod-stream ufw
+rm /etc/nginx/sites-enabled/default
+
+ufw default deny incoming
+ufw allow 22/tcp
+ufw allow 80/tcp       # certificate checks only - see Step 10.4
+ufw allow 443/tcp
+ufw allow 51820/udp
+ufw enable
+```
+
+Confirm `sshd -T | grep passwordauthentication` prints `no`, then reboot once
+so the updates take effect.
+
+### Step 10.3 — The tunnel
+
+**VPS side:** generate a key and create `/etc/wireguard/wg0.conf` from
+[`relay/vps-wg0.conf.example`](relay/vps-wg0.conf.example), then
+`systemctl enable --now wg-quick@wg0`.
+
+**Home side:** no WireGuard install on the host is needed. The `wg-relay`
+container holds the tunnel, and two tiny `socat` containers share its network
+namespace (the same pattern as qBittorrent inside gluetun) to pass ports 443
+and 80 on to npm.
+
+1. Generate the home key and write `wg-relay/wg_confs/wg0.conf` from
+   [`relay/home-wg0.conf.example`](relay/home-wg0.conf.example). `wg-relay/`
+   is gitignored, so the private key never reaches the repo.
+2. Enable the optional services in `.env`:
+   ```
+   COMPOSE_PROFILES=relay
+   ```
+   Without that line `docker compose up -d` leaves all three containers out,
+   which is what someone running only Netbird wants.
+3. `docker compose up -d`
+4. Add the home public key as a peer in the VPS config, then check:
+   ```bash
+   wg show wg0            # on the VPS: "latest handshake: N seconds ago"
+   ping -c3 10.77.0.2     # the home end answers
+   ```
+
+### Step 10.4 — Forward only the public names
+
+Two nginx configs on the VPS:
+
+- [`relay/stream-relay.conf.example`](relay/stream-relay.conf.example):
+  port 443. It passes TLS through by hostname and drops everything not on the
+  list.
+- [`relay/acme-relay.conf.example`](relay/acme-relay.conf.example): port 80.
+  It forwards only `/.well-known/acme-challenge/`, so npm can obtain
+  certificates, and redirects everything else to HTTPS.
+
+Check from a machine outside your network:
+
+```bash
+openssl s_client -connect <VPS_IP>:443 -servername jellyfin.yourdomain.tld   # reaches npm
+openssl s_client -connect <VPS_IP>:443 -servername anything.example          # dropped
+curl -H "Host: sonarr.yourdomain.internal" http://<VPS_IP>/                  # no answer
+```
+
+Before npm has a certificate for the name, the first command ends in
+`tlsv1 unrecognized name`. That alert comes from npm at home, which proves the
+whole path works.
+
+The Host-header test matters most. npm serves its internal admin hosts on port
+80, and the relay must never let an outside request reach them.
+
+---
+
 ## Later / stretch goals
 
 Once the basics work, add these one at a time:
 
-- **Cloudflare Tunnel** — buy a domain (~€10/yr, Cloudflare Registrar is zero-hassle), point a subdomain (`jellyfin.yourdomain.com`) at your homelab through Cloudflare's edge. Solves the cellular relay bandwidth cap in §5, gives you a real HTTPS cert, and lets friends/family reach Jellyfin/Jellyseerr with no VPN client at all.
+- **Public links for friends** — done with a relay VPS instead of Cloudflare Tunnel, whose terms do not allow streaming video. See Phase 10. Optional: Netbird alone is a complete setup.
 - **Vaultwarden** — self-hosted Bitwarden (password manager). Tiny, always worth running.
 - **Offsite backups** — Duplicati or restic to Backblaze B2 (~€0.005/GB/mo). Covers Nextcloud data + your `~/homelab/` compose config folder. Without this a single drive failure loses everything.
 - **Immich** — self-hosted Google Photos replacement, with AI face recognition

@@ -63,10 +63,13 @@ services:
     container_name: wg-relay
     image: lscr.io/linuxserver/wireguard:latest
     restart: unless-stopped
-    # Outbound tunnel to the public relay VPS. Friends connect to the VPS, which
-    # forwards their still-encrypted HTTPS down this tunnel, so the ISP sees one
-    # WireGuard flow instead of every visitor, and no router port is opened.
+    # OPTIONAL (profile "relay", TODO.md Phase 10). Netbird remains the default
+    # way in; this only adds public links for people without a VPN app.
+    # Outbound tunnel to a relay VPS. Friends connect to the VPS, which forwards
+    # their still-encrypted HTTPS down this tunnel, so the ISP sees one WireGuard
+    # flow instead of every visitor, and no router port is opened.
     # Keys and the peer config live in ./wg-relay (gitignored).
+    profiles: ["relay"]
     cap_add:
       - NET_ADMIN
     environment:
@@ -80,6 +83,7 @@ services:
     container_name: relay-forward
     image: alpine/socat:latest
     restart: unless-stopped
+    profiles: ["relay"]
     # Shares the wg-relay network namespace, so it listens on the tunnel address.
     # Plain TCP passthrough to npm: TLS is terminated at home, never on the VPS.
     network_mode: "service:wg-relay"
@@ -91,6 +95,7 @@ services:
     container_name: relay-forward-http
     image: alpine/socat:latest
     restart: unless-stopped
+    profiles: ["relay"]
     # Port 80 on the tunnel address, for certificate verification only. The VPS
     # passes nothing here except /.well-known/acme-challenge/ for the public
     # names, so the plain-HTTP admin hosts in npm stay unreachable from outside.

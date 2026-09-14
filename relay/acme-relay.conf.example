@@ -1,0 +1,28 @@
+# VPS: /etc/nginx/sites-available/acme-relay, symlinked into sites-enabled.
+# Remove the stock default site first: rm /etc/nginx/sites-enabled/default
+#
+# Port 80 exists only so Let's Encrypt can verify the public names. The
+# challenge is proxied down the tunnel to npm, which requests the certificates;
+# every other request on these names is sent to HTTPS. npm's plain-HTTP admin
+# hosts are never reachable this way: only the challenge path is forwarded.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name jellyfin.yourdomain.tld seerr.yourdomain.tld;
+
+    location /.well-known/acme-challenge/ {
+        proxy_pass http://10.77.0.2:80;
+        proxy_set_header Host $host;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# Any other name, or the bare IP: close the connection without answering.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
