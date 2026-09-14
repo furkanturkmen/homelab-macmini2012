@@ -44,6 +44,30 @@ services:
     cap_add:
       - NET_ADMIN
 
+  dnscrypt-proxy:
+    container_name: dnscrypt-proxy
+    labels:
+      # Not updated unattended, like pihole: it now carries every DNS lookup in the
+      # house, and a bad 4 AM update would take the whole network offline.
+      com.centurylinklabs.watchtower.enable: "false"
+    image: klutchell/dnscrypt-proxy:latest
+    restart: unless-stopped
+    # Encrypted upstream for Pi-hole (DNS over HTTPS to Quad9). Without it every
+    # domain the household looks up crosses the ISP line in plain text.
+    # Pi-hole is pointed here at runtime; pihole.toml is gitignored, so the
+    # setting is recorded here:
+    #   pihole-FTL --config dns.upstreams '["<HOST_LAN_IP>#5053"]'
+    # Rollback to plain DNS:
+    #   pihole-FTL --config dns.upstreams '["8.8.8.8","8.8.4.4"]'
+    # Published on the LAN IP rather than joined to pihole's namespace, so a
+    # pihole recreate cannot leave this container on a dead network.
+    user: "${PUID}:${PGID}"
+    ports:
+      - "${HOST_LAN_IP}:5053:5053/udp"
+      - "${HOST_LAN_IP}:5053:5053/tcp"
+    volumes:
+      - ./dnscrypt-proxy:/config
+
   nginx-proxy-manager:
     container_name: npm
     labels:

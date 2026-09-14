@@ -1,0 +1,43 @@
+# dnscrypt-proxy: encrypted upstream for Pi-hole.
+#
+# Pi-hole used to forward every lookup to 8.8.8.8 in plain text, so the ISP
+# could read each domain name the whole household looked up. Pi-hole now
+# forwards to this container, which sends the queries over HTTPS (port 443,
+# indistinguishable from normal web traffic) to Quad9.
+
+listen_addresses = ['0.0.0.0:5053']
+
+# Quad9: Swiss non-profit, no query logging, blocks known malware domains.
+server_names = ['quad9-doh-ip4-port443-filter-pri']
+
+doh_servers = true
+dnscrypt_servers = false
+ipv6_servers = false
+require_dnssec = true
+require_nolog = true
+require_nofilter = false
+
+# Never ask the system resolver. On this host that path can lead back to
+# Pi-hole, which would forward to this container again - the same shape as
+# the conditional-forwarding loop that took DNS down in September 2026.
+# The bootstrap resolvers are only used to find the Quad9 server itself and to
+# fetch the signed resolver list, never for household queries.
+ignore_system_dns = true
+bootstrap_resolvers = ['9.9.9.9:53', '149.112.112.112:53']
+netprobe_address = '9.9.9.9:53'
+netprobe_timeout = 60
+
+# Pi-hole caches as well; a small cache here only smooths over upstream blips.
+cache = true
+cache_size = 4096
+
+log_level = 2
+
+[sources.public-resolvers]
+urls = [
+  'https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md',
+  'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md',
+]
+cache_file = '/config/cache/public-resolvers.md'
+minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'
+refresh_delay = 73
