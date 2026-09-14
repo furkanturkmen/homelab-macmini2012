@@ -59,6 +59,34 @@ services:
       - ./npm/data:/data
       - ./npm/letsencrypt:/etc/letsencrypt
 
+  wg-relay:
+    container_name: wg-relay
+    image: lscr.io/linuxserver/wireguard:latest
+    restart: unless-stopped
+    # Outbound tunnel to the public relay VPS. Friends connect to the VPS, which
+    # forwards their still-encrypted HTTPS down this tunnel, so the ISP sees one
+    # WireGuard flow instead of every visitor, and no router port is opened.
+    # Keys and the peer config live in ./wg-relay (gitignored).
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - ./wg-relay:/config
+
+  relay-forward:
+    container_name: relay-forward
+    image: alpine/socat:latest
+    restart: unless-stopped
+    # Shares the wg-relay network namespace, so it listens on the tunnel address.
+    # Plain TCP passthrough to npm: TLS is terminated at home, never on the VPS.
+    network_mode: "service:wg-relay"
+    depends_on:
+      - wg-relay
+    command: "TCP-LISTEN:443,fork,reuseaddr TCP:npm:443"
+
   # =========================================================
   # ADMIN
   # =========================================================
