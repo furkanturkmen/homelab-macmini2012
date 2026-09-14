@@ -13,6 +13,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -48,11 +49,22 @@ const baseStore = () => ({
   canary: { seerrUserId: 9, blockedTags: [5], hiddenTitle: 'movie:100', cleanTitle: 'movie:200', keywordId: 5 },
 });
 
-function json(res, status, obj) {
+const etagOf = (text) => `W/"${createHash('sha1').update(text).digest('hex')}"`;
+
+function json(res, status, obj, req = null) {
   const body = JSON.stringify(obj);
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
+  // Like Express: every JSON answer carries an ETag, and a matching
+  // If-None-Match gets a bodiless 304.
+  const etag = etagOf(body);
+  if (req && req.headers['if-none-match'] === etag) {
+    res.writeHead(304, { etag });
+    return res.end();
+  }
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body), etag });
   res.end(body);
 }
+
+const SEARCH_BODY = { page: 1, results: [{ id: 100, mediaType: 'movie' }, { id: 200, mediaType: 'movie' }] };
 
 function html(res, status, text) {
   res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'content-length': Buffer.byteLength(text) });
@@ -104,6 +116,7 @@ function fakeSeerr() {
         ],
       });
     }
+    if (p === '/api/v1/search') return json(res, 200, SEARCH_BODY, req);
     if (p === '/api/v1/discover/movies') return json(res, 200, { results: [{ id: 200, mediaType: 'movie' }, { id: 301, mediaType: 'movie' }] });
     if (p === '/api/v1/discover/keyword/5/movies') return json(res, 200, { results: [{ id: 100, mediaType: 'movie' }, { id: 200, mediaType: 'movie' }] });
     if (p === '/api/v1/request/1') return json(res, 200, { id: 1, media: { id: 7, tmdbId: 100, mediaType: 'movie' } });
@@ -119,7 +132,11 @@ function fakeSeerr() {
     if (p === '/collection/10') return html(res, 200, nextHtml({ collection: { id: 10, parts } }));
     if (p === '/_next/data/B1/collection/10.json') return json(res, 200, { pageProps: { collection: { id: 10, parts } } });
     if (p === '/_next/static/app.js') {
-      res.writeHead(200, { 'content-type': 'application/javascript' });
+      if (req.headers['if-none-match'] === 'W/"static-1"') {
+        res.writeHead(304, { etag: 'W/"static-1"' });
+        return res.end();
+      }
+      res.writeHead(200, { 'content-type': 'application/javascript', etag: 'W/"static-1"' });
       return res.end('console.log(1)');
     }
     return html(res, 404, '<h1>Seerr 404 page</h1>');
@@ -312,6 +329,29 @@ test('a broken store withholds content from filterable people but not from admin
   await writeFile(storePath, JSON.stringify(baseStore()));
   await new Promise((r) => setTimeout(r, 120));
   assert.equal((await get('/api/v1/discover/trending', as('kid'))).status, 200);
+});
+
+test('a cached unfiltered answer cannot be revalidated into a filtered session', async () => {
+  // The device searched earlier as an unfiltered person and kept the answer
+  // with its ETag. Now a filtered person on the same device asks again.
+  const staleEtag = etagOf(JSON.stringify(SEARCH_BODY));
+  const res = await get('/api/v1/search?query=x', { ...as('kid'), 'if-none-match': staleEtag });
+  assert.equal(res.status, 200, 'never a 304 that would reuse the unfiltered copy');
+  assert.deepEqual(ids(await res.json()), [200]);
+  assert.equal(res.headers.get('etag'), null, 'no validator to revalidate with next time');
+  assert.match(res.headers.get('cache-control'), /no-store/);
+
+  const admin = await get('/api/v1/search?query=x', { ...as('admin'), 'if-none-match': staleEtag });
+  assert.equal(admin.status, 200, 'unfiltered answers are not stored for reuse either');
+  assert.equal(admin.headers.get('etag'), null);
+  assert.match(admin.headers.get('cache-control'), /no-store/);
+});
+
+test('static assets keep their validators and may be revalidated', async () => {
+  const first = await get('/_next/static/app.js', as('kid'));
+  assert.equal(first.headers.get('etag'), 'W/"static-1"');
+  const again = await get('/_next/static/app.js', { ...as('kid'), 'if-none-match': 'W/"static-1"' });
+  assert.equal(again.status, 304);
 });
 
 test('static assets and unrelated routes pass straight through', async () => {

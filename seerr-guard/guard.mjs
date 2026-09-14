@@ -71,6 +71,22 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms).unref());
 
 const HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
 
+/*
+ * Anything that is not a shared static asset can differ per person, so no
+ * cache may ever reuse it across people - and a browser or phone is exactly
+ * such a cache when two people use the same device.
+ *
+ * This was a real leak. Seerr tags its JSON with an ETag. A device that had
+ * searched as an unfiltered person asked again, as a filtered one, with
+ * If-None-Match; Seerr compared against its own unfiltered answer and said 304
+ * Not Modified; the guard passed the 304 on, and the device showed its cached
+ * unfiltered results. So for these paths the conditional headers never reach
+ * Seerr (it always sends a full answer, which is then filtered), and responses
+ * carry no validators and are never stored.
+ */
+const SHARED_STATIC = /^\/(_next\/static\/|imageproxy\/|avatarproxy\/|images\/|favicon|logo|sw\.js|site\.webmanifest|manifest|apple-|android-|offline|robots\.txt)/;
+const isPersonal = (url) => !SHARED_STATIC.test(String(url ?? ''));
+
 function upstreamHeaders(req, { identity = false, bodyLength = null } = {}) {
   const headers = {};
   for (const [name, value] of Object.entries(req.headers)) {
@@ -81,6 +97,10 @@ function upstreamHeaders(req, { identity = false, bodyLength = null } = {}) {
   headers['x-forwarded-proto'] ??= 'http';
   headers['x-forwarded-host'] ??= req.headers.host ?? '';
   if (identity) headers['accept-encoding'] = 'identity';
+  if (isPersonal(req.url)) {
+    delete headers['if-none-match'];
+    delete headers['if-modified-since'];
+  }
   if (bodyLength !== null) {
     headers['content-length'] = String(bodyLength);
     delete headers['transfer-encoding'];
@@ -100,20 +120,21 @@ function upstreamOptions(req, opts) {
   };
 }
 
-function responseHeaders(headers, { rewritten = false } = {}) {
+function responseHeaders(headers, { rewritten = false, personal = false } = {}) {
   const out = {};
   for (const [name, value] of Object.entries(headers)) {
     if (HOP.has(name)) continue;
     if (rewritten && (name === 'content-length' || name === 'content-encoding' || name === 'etag')) continue;
+    if (personal && (name === 'etag' || name === 'last-modified' || name === 'cache-control' || name === 'expires' || name === 'vary')) continue;
     out[name] = value;
   }
-  return out;
+  return personal ? { ...out, ...PRIVATE } : out;
 }
 
 /** Plain streaming proxy: nothing buffered, nothing changed. */
 function streamProxy(req, res, { body = null } = {}) {
   const up = http.request(upstreamOptions(req, { bodyLength: body ? body.length : null }), (upRes) => {
-    res.writeHead(upRes.statusCode ?? 502, responseHeaders(upRes.headers));
+    res.writeHead(upRes.statusCode ?? 502, responseHeaders(upRes.headers, { personal: isPersonal(req.url) }));
     upRes.pipe(res);
   });
   up.on('error', (err) => {
@@ -168,7 +189,8 @@ const isJson = (headers) => /\bjson\b/i.test(String(headers['content-type'] ?? '
 const isHtml = (headers) => /text\/html/i.test(String(headers['content-type'] ?? ''));
 
 function relay(res, up, extra = {}) {
-  const headers = { ...responseHeaders(up.headers, { rewritten: true }), ...extra, 'content-length': String(up.buffer.length) };
+  // Only personal paths are ever fetched in full, so everything relayed is personal.
+  const headers = { ...responseHeaders(up.headers, { rewritten: true, personal: true }), ...extra, 'content-length': String(up.buffer.length) };
   res.writeHead(up.status, headers);
   res.end(up.buffer);
 }
@@ -595,7 +617,7 @@ async function pageCollectionResponse(req, res, ctx, route) {
   if (!removedTotal) return relay(res, up, PRIVATE);
   decided(ctx, `filter ${removedTotal} part(s) from`, null, req);
   if (SHADOW) return relay(res, up, PRIVATE);
-  const headers = { ...responseHeaders(up.headers, { rewritten: true }), ...PRIVATE, 'x-seerr-guard': 'filtered' };
+  const headers = { ...responseHeaders(up.headers, { rewritten: true, personal: true }), 'x-seerr-guard': 'filtered' };
   return sendBody(res, 200, headers, Buffer.from(rewritten, 'utf8'));
 }
 
