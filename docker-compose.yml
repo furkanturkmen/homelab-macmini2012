@@ -75,6 +75,12 @@ services:
       com.centurylinklabs.watchtower.enable: "false"
     image: jc21/nginx-proxy-manager:latest
     restart: unless-stopped
+    # On the relay network as well, so visitors arriving through the VPS tunnel
+    # reach npm from an address outside the default Docker network (see the
+    # relay network at the bottom of this file).
+    networks:
+      - default
+      - relay
     ports:
       - "80:80"
       - "443:443"
@@ -94,6 +100,11 @@ services:
     # flow instead of every visitor, and no router port is opened.
     # Keys and the peer config live in ./wg-relay (gitignored).
     profiles: ["relay"]
+    # Only on the relay network, never on the default one. Jellyfin counts the
+    # default Docker network as local (so jellylab-push and Seerr can act for
+    # home-only accounts), and friends must still count as remote.
+    networks:
+      - relay
     cap_add:
       - NET_ADMIN
     environment:
@@ -571,3 +582,16 @@ services:
       - /mnt/storage/media:/media:ro
     depends_on:
       - ntfy
+
+networks:
+  # The VPS tunnel gets a network of its own. npm sets X-Forwarded-For to the
+  # address a connection came from, and Jellyfin decides "local or remote" from
+  # it. Everything on the default network (172.18.0.0/16 here) is trusted as
+  # local, because services like jellylab-push and Seerr call Jellyfin with the
+  # tokens of people who may only sign in from home. Tunnel traffic arriving
+  # from this separate range keeps being remote, so the remote bitrate cap and
+  # home-only accounts still apply to everyone coming in through the relay.
+  relay:
+    ipam:
+      config:
+        - subnet: 172.31.77.0/24
