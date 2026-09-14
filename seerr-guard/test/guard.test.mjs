@@ -34,7 +34,7 @@ let seerr;
 let push;
 let guard;
 let base;
-const seen = { requests: [], settingsPosts: [], pushPuts: [] };
+const seen = { requests: [], settingsPosts: [], pushPuts: [], logouts: [] };
 
 const nextHtml = (pageProps, buildId = 'B1') =>
   `<!doctype html><html><body><div id="__next"></div><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { pageProps }, buildId })}</script></body></html>`;
@@ -87,6 +87,19 @@ function fakeSeerr() {
     let m;
 
     if (p === '/api/v1/auth/me') return me ? json(res, 200, me) : json(res, 401, { message: 'unauthorized' });
+    if (p === '/api/v1/auth/jellyfin' && req.method === 'POST') {
+      const { username } = JSON.parse(await readAll(req));
+      const sid = { furkan: 'adminsid', talha: 'kidsid' }[username];
+      if (!sid) return json(res, 401, { message: 'bad login' });
+      const body = JSON.stringify(USERS[SESSIONS[sid]]);
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'set-cookie': `connect.sid=${sid}; Path=/; HttpOnly`, 'content-length': Buffer.byteLength(body) });
+      return res.end(body);
+    }
+    if (p === '/api/v1/auth/logout' && req.method === 'POST') {
+      seen.logouts.push(req.headers.cookie);
+      return json(res, 200, {});
+    }
+    if (p === '/api/v1/settings/main') return me ? json(res, 200, { apiKey: 'very-secret' }) : json(res, 401, {});
     if ((m = /^\/api\/v1\/user\/(\d+)$/.exec(p))) return USERS[m[1]] ? json(res, 200, USERS[m[1]]) : json(res, 404, {});
     if ((m = /^\/api\/v1\/user\/(\d+)\/settings\/main$/.exec(p))) {
       if (req.method === 'POST') {
@@ -182,6 +195,7 @@ before(async () => {
       PUSH_URL: `http://127.0.0.1:${pushPort}`,
       FILTER_STORE_SECRET: SECRET,
       INTERNAL_NETWORKS: '127.0.0.1/32',
+      RELAY_NETWORKS: '172.31.77.0/24',
       LOOKUP_BUDGET_MS: '500',
       STORE_RECHECK_MS: '50',
     },
@@ -345,6 +359,42 @@ test('a cached unfiltered answer cannot be revalidated into a filtered session',
   assert.equal(admin.status, 200, 'unfiltered answers are not stored for reuse either');
   assert.equal(admin.headers.get('etag'), null);
   assert.match(admin.headers.get('cache-control'), /no-store/);
+});
+
+const RELAYED = { 'x-forwarded-for': '203.0.113.9, 172.31.77.2' };
+const signIn = (username, headers = {}) => fetch(`${base}/api/v1/auth/jellyfin`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', ...headers },
+  body: JSON.stringify({ username, password: 'x' }),
+});
+
+test('through the relay an administrator cannot sign in, and gets no cookie', async () => {
+  const before = seen.logouts.length;
+  const res = await signIn('furkan', RELAYED);
+  assert.equal(res.status, 403);
+  assert.equal(res.headers.get('x-seerr-guard'), 'home-only');
+  assert.equal(res.headers.get('set-cookie'), null, 'the session cookie never reaches the visitor');
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(seen.logouts.length, before + 1, 'and the session Seerr created is ended');
+});
+
+test('through the relay an ordinary person signs in normally', async () => {
+  const res = await signIn('talha', RELAYED);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('set-cookie'), /connect\.sid=kidsid/);
+});
+
+test('an administrator session or the API key is refused through the relay but works at home', async () => {
+  const relayed = await get('/api/v1/settings/main', { ...as('admin'), ...RELAYED });
+  assert.equal(relayed.status, 403);
+  const apiKey = await get('/api/v1/settings/main', { 'x-api-key': API_KEY, ...RELAYED });
+  assert.equal(apiKey.status, 403, 'the API key acts as the owner, so it is refused too');
+  const home = await get('/api/v1/settings/main', as('admin'));
+  assert.equal(home.status, 200);
+  const forged = await get('/api/v1/settings/main', { ...as('admin'), 'x-forwarded-for': '172.31.77.2, 192.168.1.10' });
+  assert.equal(forged.status, 200, 'a relay address the visitor typed on the left does not decide anything');
+  const kid = await get('/api/v1/movie/200', { ...as('kid'), ...RELAYED });
+  assert.equal(kid.status, 200, 'filtered people use the relay as usual');
 });
 
 test('static assets keep their validators and may be revalidated', async () => {

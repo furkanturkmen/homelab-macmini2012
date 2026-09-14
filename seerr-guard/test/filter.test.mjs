@@ -5,7 +5,7 @@ import {
   PERMISSION, hasPermission, keyOf, parseIds, readStore, entryForUser, hiddenSet,
   classify, rowKey, collectKeys, filterBody, singleTitleKey, detailKeywords, makeHider,
   filterCollectionProps, rewriteNextData, buildIdOf, mergeSettings, splitSettings,
-  allowedChanges, parseCidrs, isInternalPeer,
+  allowedChanges, parseCidrs, isInternalPeer, isPrivileged, addressIn, viaRelay,
 } from '../filter.mjs';
 
 const ADULT = [256466, 155477, 195669, 198385, 356759, 341367];
@@ -223,4 +223,25 @@ test('isInternalPeer: default Docker network and loopback only, never proxied, r
 
 test('keyOf', () => {
   assert.equal(keyOf('tv', 1399), 'tv:1399');
+});
+
+test('isPrivileged: admins, settings and user managers, but not request managers', () => {
+  assert.equal(isPrivileged(2), true);
+  assert.equal(isPrivileged(4), true);
+  assert.equal(isPrivileged(8), true);
+  assert.equal(isPrivileged(16 + 32 + 128), false, 'request + auto-approve + manage requests is day-to-day use');
+  assert.equal(isPrivileged(0), false);
+});
+
+test('viaRelay trusts only the last forwarded address, and only from inside Docker', () => {
+  const internal = parseCidrs('172.18.0.0/16,127.0.0.1/32');
+  const relay = parseCidrs('172.31.77.0/24');
+  assert.equal(viaRelay('172.18.0.14', { 'x-forwarded-for': '172.31.77.2' }, internal, relay), true);
+  assert.equal(viaRelay('172.18.0.14', { 'x-forwarded-for': '203.0.113.9, 172.31.77.2' }, internal, relay), true, 'whatever the visitor sent stays on the left');
+  assert.equal(viaRelay('172.18.0.14', { 'x-forwarded-for': '172.31.77.2, 192.168.1.10' }, internal, relay), false, 'a forged relay address on the left does not count');
+  assert.equal(viaRelay('172.18.0.14', { 'x-forwarded-for': '192.168.1.10' }, internal, relay), false);
+  assert.equal(viaRelay('192.168.1.10', { 'x-forwarded-for': '172.31.77.2' }, internal, relay), false, 'only npm inside Docker can vouch for the address');
+  assert.equal(viaRelay('172.18.0.14', {}, internal, relay), false);
+  assert.equal(viaRelay('172.18.0.14', { 'x-forwarded-for': '172.31.77.2' }, internal, []), false, 'off unless configured');
+  assert.equal(addressIn('::1', internal), true);
 });
