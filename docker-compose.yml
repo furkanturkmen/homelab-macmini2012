@@ -478,6 +478,11 @@ services:
       # Where /__guard/canary and /__guard/decide may be called from: the
       # default Docker network (Uptime Kuma) and the container itself.
       INTERNAL_NETWORKS: "172.18.0.0/16,127.0.0.1/32"
+      # The relay network below. Visitors arriving through the public relay may
+      # not use accounts that can change Seerr (administrators), because Seerr
+      # checks their Jellyfin sign-in from inside Docker, where Jellyfin's own
+      # home-only setting does not apply.
+      RELAY_NETWORKS: "172.31.77.0/24"
     volumes:
       - ./seerr-guard:/app:ro
       - ./seerr-guard-data:/data

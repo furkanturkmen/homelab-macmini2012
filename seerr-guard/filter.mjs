@@ -13,11 +13,21 @@
  */
 
 /** Seerr's permission bits (server/lib/permissions.ts). ADMIN implies all. */
-export const PERMISSION = Object.freeze({ ADMIN: 2, MANAGE_USERS: 8, REQUEST: 32 });
+export const PERMISSION = Object.freeze({ ADMIN: 2, MANAGE_SETTINGS: 4, MANAGE_USERS: 8, REQUEST: 32 });
 
 export const hasPermission = (permissions, bit) => {
   const p = Number(permissions) | 0;
   return (p & PERMISSION.ADMIN) !== 0 || (p & bit) !== 0;
+};
+
+/**
+ * Whether an account can change Seerr itself: its settings (which hold every
+ * API key), or other people's accounts. Managing requests is not enough to
+ * count - that is day-to-day use.
+ */
+export const isPrivileged = (permissions) => {
+  const p = Number(permissions) | 0;
+  return (p & (PERMISSION.ADMIN | PERMISSION.MANAGE_SETTINGS | PERMISSION.MANAGE_USERS)) !== 0;
 };
 
 const MEDIA_TYPES = new Set(['movie', 'tv']);
@@ -449,8 +459,31 @@ export function parseCidrs(text) {
  */
 export function isInternalPeer(remoteAddress, headers, ranges) {
   if (headers?.['x-forwarded-for']) return false;
-  if (String(remoteAddress ?? '') === '::1') return true;
-  const n = ipv4(remoteAddress);
+  return addressIn(remoteAddress, ranges);
+}
+
+/** Whether an address falls in any of the ranges. `::1` counts as loopback. */
+export function addressIn(address, ranges) {
+  if (String(address ?? '') === '::1') return (ranges ?? []).some((r) => r.first <= 2130706433 && r.last >= 2130706433);
+  const n = ipv4(address);
   if (n === null) return false;
   return (ranges ?? []).some((r) => n >= r.first && n <= r.last);
+}
+
+/**
+ * Whether a request reached us through the public relay.
+ *
+ * Tunnel traffic arrives at npm from the relay network, and npm appends that
+ * address to X-Forwarded-For before passing the request on. Only the LAST
+ * entry is trusted, and only when the request came from inside the Docker
+ * network (npm): everything to the left of it is whatever the visitor sent,
+ * and a visitor could claim anything there.
+ */
+export function viaRelay(remoteAddress, headers, internalRanges, relayRanges) {
+  if (!(relayRanges ?? []).length) return false;
+  const xff = String(headers?.['x-forwarded-for'] ?? '').trim();
+  if (!xff) return false;
+  if (!addressIn(remoteAddress, internalRanges)) return false;
+  const last = xff.split(',').pop().trim();
+  return addressIn(last, relayRanges);
 }
