@@ -98,6 +98,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Network | Pi-hole | 8080 | Ad blocker + local DNS |
 | Network | Nginx Proxy Manager | 80 / 443 / 81 | Reverse proxy + HTTPS |
 | Network | Netbird (on host) | — | Mesh VPN for remote access |
+| Network | wg-relay + relay-forward (optional) | — | Tunnel to a relay VPS for public links, off unless `COMPOSE_PROFILES=relay` |
 | Network | gluetun | 8083 / 6881 | VPN tunnel qBittorrent runs inside |
 | Network | ntfy | 8095 | Self-hosted push notifications |
 | Network | jellylab-push | 8099 | ntfy to iOS app push bridge |
@@ -220,7 +221,8 @@ Rough phases in [TODO.md](TODO.md):
 8. Route qBittorrent through a VPN with a real kill switch — Phase 7
 9. Score H.264 above HEVC/AV1 in Sonarr and Radarr, so the server stops transcoding what it cannot hardware-decode — Phase 8
 10. Guard against torrents that are executables wearing a release name, and demote the indexer that served one — Phase 9
-11. Later: Cloudflare Tunnel for public sharing, Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
+11. Optional: public `https://` links for family and friends through a small relay VPS, with no VPN app for them and one encrypted flow for your ISP to see. Netbird keeps working alongside it — Phase 10
+12. Later: Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
 

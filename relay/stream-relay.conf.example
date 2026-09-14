@@ -1,0 +1,33 @@
+# VPS: /etc/nginx/stream-relay.conf, included from the top level of
+# /etc/nginx/nginx.conf with:  include /etc/nginx/stream-relay.conf;
+# Needs the stream module:     apt install nginx libnginx-mod-stream
+#
+# TLS is not terminated here. nginx reads only the requested hostname (SNI)
+# from the handshake and passes the still-encrypted connection down the tunnel
+# to npm at home. Names not listed are dropped, so a scan of the bare IP gets
+# nothing back.
+stream {
+    log_format relay "$remote_addr [$time_local] sni=$ssl_preread_server_name "
+                     "-> $upstream_addr $status out=$bytes_sent in=$bytes_received ${session_time}s";
+    access_log /var/log/nginx/relay.log relay;
+
+    map $ssl_preread_server_name $relay_upstream {
+        jellyfin.yourdomain.tld  home;
+        seerr.yourdomain.tld     home;
+        default                  drop;
+    }
+
+    upstream home { server 10.77.0.2:443; }
+    # Nothing listens on port 1, so the client connection is closed at once.
+    upstream drop { server 127.0.0.1:1; }
+
+    server {
+        listen 443;
+        listen [::]:443;
+        ssl_preread on;
+        proxy_pass $relay_upstream;
+        proxy_connect_timeout 5s;
+        # A paused stream can sit idle for a while; do not cut it at 10 minutes.
+        proxy_timeout 1h;
+    }
+}
