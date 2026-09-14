@@ -361,6 +361,18 @@ Suggested monitors:
 
 Skip Watchtower — no UI.
 
+Two more that the HTTP list misses. Pi-hole's web page can load while its DNS
+engine is dead, which is exactly what the household notices, so also add a
+**DNS** monitor (Add New Monitor → Monitor Type: DNS):
+
+| Name | Hostname | Resolver Server | Port |
+|------|----------|-----------------|------|
+| Pi-hole · DNS | `example.com` | `192.168.1.42` | `53` |
+| Pi-hole · encrypted upstream | `example.com` | `192.168.1.42` | `5053` (only after Phase 11) |
+
+Uptime Kuma does not alert anyone until a notification is set up. Once ntfy
+runs (Phase 6), connect it; see *Uptime Kuma alerts* in Phase 6.
+
 **6. Jellyfin — `http://homelab:8096`**
 
 Wizard: language → admin account → **Add Media Library** for each type you want. Create the host folders first if you haven't:
@@ -429,11 +441,56 @@ Wizard walks you through:
 
 Jellyseerr auto-syncs your Jellyfin user list — friends log in with the same Jellyfin credentials. Settings → Users → default permissions controls who can request without approval.
 
+**13. Homarr — `http://homelab:7575` (dashboard; do last, it reads every other service)**
+
+Homarr needs `HOMARR_SECRET_KEY` in `.env`: exactly 64 hex characters, from
+`openssl rand -hex 32`. It encrypts every API key you give
+Homarr, so **losing it makes all saved integrations unreadable**. Keep it with
+your other secrets.
+
+Onboarding:
+
+- **Analytics: turn it off.** Left on, Homarr reports usage to PostHog. The
+  crawling/indexing toggles don't matter for a LAN-only dashboard.
+- **Base URL: choose *Host:Port* and enter the LAN IP** (`192.168.1.42`).
+  Homarr then pre-fills each integration with the right port and talks to the
+  service directly, not through NPM and DNS.
+
+Integrations that exist for this stack, and the traps in each:
+
+| Integration | URL | Credential | Trap |
+|-------------|-----|------------|------|
+| Sonarr / Radarr / Prowlarr | `:8989` / `:7878` / `:9696` | API key (Settings → General) | — |
+| Bazarr | `:6767` | API key (Settings → General) | — |
+| Jellyfin | `:8096` | a new API key named `Homarr` (Dashboard → API Keys) | reuse none, so it can be revoked alone |
+| Seerr | `:5055` | Seerr API key | the image is `seerr-team/seerr`: use the **Seerr** tile, the Jellyseerr tile only if that fails |
+| qBittorrent | **`:8083`** | WebUI login | the wizard guesses `:8080`, which is Pi-hole: `404 … /api/v2/auth/login`. qBittorrent lives inside gluetun |
+| Nextcloud | **`http://…:8081`** | an **app password**, not your login | the wizard guesses `:443`; nothing here speaks TLS |
+| Pi-hole | `:8080` | the web password, or a v6 app password (Settings → Web interface / API) | the wizard may try `:80` |
+| ntfy | `:8095` | — | — |
+| Uptime Kuma | `:3001` | status page **slug only** (e.g. `homelab`), plus an API key | pasting the whole status-page URL into the slug field fails |
+
+Services with no integration (Portainer, NPM) get a plain **app tile**. Tick
+*Use different URL for ping* and ping the container name
+(`http://portainer:9000`, `http://npm:81`): Homarr shares the Docker network,
+so the check never leaves the host.
+
+*Tools → Docker* stays empty on purpose. It needs `/var/run/docker.sock`, and
+socket access is root on the host for anything that can reach Homarr's login.
+Portainer already covers that view.
+
+`./homarr` is gitignored. Its database holds the login's password hash and
+sessions, and it was once pushed to the public repo before that entry existed.
+Forgot the Homarr password? `docker exec homarr homarr reset-password -u <user>`
+prints a new one.
+
 ### Step 4.6 — Point your router's DNS at Pi-hole
 
 - Router admin page → DNS settings
 - Set the primary DNS to the Mac Mini's IP (`192.168.1.42`)
-- Optionally set secondary to `1.1.1.1` (Cloudflare fallback)
+- **Leave the secondary empty**, or set it to Pi-hole as well. A public
+  secondary such as `1.1.1.1` lets devices skip Pi-hole (ads come back at
+  random), and after Phase 11 it would also send lookups past the encryption
 - Save, reboot the router
 
 Now every device on your wifi uses Pi-hole automatically. Ads gone.
@@ -685,6 +742,20 @@ import, so enabling it here double-notifies every single download.
 
 While you are in Seerr, check **Settings → General → Application URL** is set.
 Empty means every notification it sends has a dead link in it.
+
+### Uptime Kuma alerts (same topic)
+
+Uptime Kuma shows red and green on its own page but alerts nobody until a
+notification exists. Settings → Notifications → **Setup Notification**:
+
+- **Notification Type:** ntfy
+- **Server URL:** `http://ntfy`. Kuma is on the same Docker network, so the
+  container name works and nothing leaves the host
+- **Topic:** your `NTFY_TOPIC`
+- **Priority:** 4. Kuma raises *down* alerts one step on its own
+- **Authentication:** none. The topic is write-only for anonymous clients
+  (Step 6.2), so no ntfy password ends up in Kuma's database
+- Tick **Default enabled** and **Apply on all existing monitors**, then **Test**
 
 ### Step 6.5 — The phone
 
@@ -1204,6 +1275,35 @@ Requirements: **KVM** virtualisation (container-based VPSes often cannot load
 WireGuard), a **dedicated IPv4**, and Ubuntu LTS. The cheapest tier of most EU
 hosts is enough.
 
+This setup uses **STRATO VPS Linux S** (1 vCore, 2 GB, 60 GB NVMe, KVM,
+dedicated IPv4, unlimited traffic, about €4/month in September 2026).
+OVHcloud VPS-1, netcup and Hetzner work the same way. Compare the renewal price,
+not the first-months promotion.
+
+At checkout:
+
+- **Order as a private customer.** At STRATO a consumer can cancel monthly
+  after the first term; a business customer has to cancel before each yearly
+  renewal.
+- **Skip the SSL and backup add-ons.** The certificates are issued at home by
+  npm (Let's Encrypt), and the VPS only holds a few config files that this
+  phase recreates in minutes.
+- **Untick optional marketing consent.** It shares personal data with ad
+  partners, which defeats the point of the exercise.
+- Read the provider's **acceptable-use terms**. Relaying your own service to
+  people who have accounts on it is ordinary hosting. The clauses to check are
+  the ones on anonymisation services, on handing the server to anonymous third
+  parties, and on copyright complaints, which let a host suspend a server.
+
+In the install form pick the **plain Ubuntu LTS image**, not the Plesk or app
+variants. The web-console password field may accept letters and digits only;
+a 24-character random one is strong regardless. After any reboot the web
+console shows `login:`. That's normal, there is no need to log in there.
+
+The VPS provider sees what your ISP would otherwise have seen: visitors' IPs,
+the hostname and how much data flows. It does not see what anyone watches,
+because TLS ends at home.
+
 Log in with a key only. If the provider's install form takes a public key,
 paste it there.
 
@@ -1286,6 +1386,91 @@ The Host-header test matters most. npm serves its internal admin hosts on port
 
 ---
 
+## Phase 11 — Encrypt Pi-hole's upstream DNS
+
+Pi-hole answers your whole network, but for everything it doesn't block or
+hold locally it asks an upstream resolver, by default in **plain text** on
+port 53. Your ISP can read every one of those lookups: each domain every device
+in the house looks up, all day. This phase is worth doing whether or not you
+use Phase 10.
+
+```
+device ──> Pi-hole (blocklists, local records) ──> dnscrypt-proxy ──HTTPS──> Quad9
+```
+
+`dnscrypt-proxy` sends the queries over HTTPS on port 443, which looks like any
+other web traffic. The resolver is Quad9: a Swiss non-profit, no query logging,
+DNSSEC validation, and known malware domains blocked.
+
+What it does **not** hide: the name of each site in the HTTPS handshake (SNI),
+and devices that ignore the router's DNS and use a hard-coded one; many Google
+TV and Chromecast devices use `8.8.8.8` directly. Hiding those means sending all
+traffic through a VPN, which is a different project.
+
+### Step 11.1 — Start dnscrypt-proxy
+
+The service and its config, [`dnscrypt-proxy/dnscrypt-proxy.toml`](dnscrypt-proxy/dnscrypt-proxy.toml),
+are in the repo. It listens on the LAN IP, port `5053`.
+
+```bash
+docker compose up -d dnscrypt-proxy
+docker logs dnscrypt-proxy   # wait for: "Server with the lowest initial latency"
+```
+
+> ⚠️ **Never let dnscrypt-proxy use the system resolver.** On this host the
+> system path can lead back to Pi-hole, which forwards to dnscrypt-proxy again:
+> a loop. A loop of that shape filled `/dev/shm` and took DNS down for the whole
+> network before. The config sets `ignore_system_dns = true` and uses fixed
+> bootstrap addresses only to find Quad9 itself.
+
+### Step 11.2 — Test it before Pi-hole depends on it
+
+```bash
+dig +short example.com @192.168.1.42 -p 5053                 # an address
+dig dnssec-failed.org @192.168.1.42 -p 5053 | grep status    # SERVFAIL: DNSSEC works
+docker exec pihole dig +short example.com @192.168.1.42 -p 5053   # reachable from Pi-hole
+```
+
+And ask Quad9 whether it's the one answering:
+
+```bash
+ip=$(dig +short on.quad9.net @192.168.1.42 -p 5053 | tail -1)
+curl -s --resolve on.quad9.net:443:$ip https://on.quad9.net | grep -o "<title>[^<]*"
+# <title>Yes, you ARE using quad9.
+```
+
+### Step 11.3 — Point Pi-hole at it
+
+The upstream is runtime config in `pihole.toml`, which is gitignored, so it is
+set by command rather than in compose. Pi-hole doesn't need a restart.
+
+```bash
+docker exec pihole pihole-FTL --config dns.upstreams '["192.168.1.42#5053"]'
+```
+
+Run the `on.quad9.net` check again, this time against Pi-hole
+(`@192.168.1.42`, no port). Confirm an ad domain still returns `0.0.0.0` and a
+local record still resolves.
+
+Rollback, if anything misbehaves:
+
+```bash
+docker exec pihole pihole-FTL --config dns.upstreams '["8.8.8.8","8.8.4.4"]'
+```
+
+### Step 11.4 — Watch it
+
+dnscrypt-proxy is now a single point of failure for the household's DNS. Two
+safeguards:
+
+- Like Pi-hole, it carries `com.centurylinklabs.watchtower.enable: "false"`, so
+  a 4 AM image update can't take the network offline unattended.
+- The two Uptime Kuma DNS monitors from Step 4.5 (ports `53` and `5053`),
+  with the ntfy alerts from Phase 6. The `5053` monitor goes red the moment the
+  container stops, even while Pi-hole is still answering from its cache.
+
+---
+
 ## Later / stretch goals
 
 Once the basics work, add these one at a time:
@@ -1313,6 +1498,22 @@ Once the basics work, add these one at a time:
   - `uptime` — 1min / 5min / 15min load history
   - Baseline for this stack at idle: ~25% RAM, load 0.3-0.6, CPU freq ~1200-1600 MHz, temp 55-62°C
 - **Does the Mac Mini need a monitor to stay on?** No. Ubuntu Server runs headless; no display attached is the intended state. It only powers off on unplug, `shutdown`, thermal cutoff, or kernel panic.
+- **Adding a service of your own?** If its data directory lives inside
+  `~/homelab`, add it to `.gitignore` **in the same commit**. The repo is
+  public, and a missing entry once published Homarr's database.
+- **Forgot the Nextcloud password?**
+  `ssh -t homelab docker exec -it -u www-data nextcloud php occ user:resetpassword <user>`.
+  It needs both `-t` and `-it`, or the prompt reads an empty password. The
+  password policy rejects anything found in the Have I Been Pwned breach list.
+  With no email on the account, "forgot password" in the web UI can't work.
+- **Need a Nextcloud app password without logging in?**
+  `docker exec -u www-data nextcloud php occ user:auth-tokens:add <user>` prints
+  one. It's a limited token, which is fine for dashboards.
+- **Adding a Pi-hole local DNS record without the UI:** `POST /api/auth` with
+  the web password returns a session id; then
+  `PUT /api/config/dns/hosts/<ip>%20<name>` with header `X-FTL-SID: <sid>`.
+  Pi-hole listens on the LAN IP, so test with `dig <name> @192.168.1.42`, not
+  `@127.0.0.1`.
 - **General Linux help:** https://askubuntu.com
 - **General homelab help:** https://reddit.com/r/selfhosted or https://reddit.com/r/homelab
 - **Pi-hole:** https://discourse.pi-hole.net
