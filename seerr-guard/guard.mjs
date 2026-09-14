@@ -33,7 +33,7 @@ import {
   PERMISSION, hasPermission, keyOf, readStore, entryForUser, hiddenSet, classify,
   collectKeys, filterBody, singleTitleKey, detailKeywords, makeHider,
   filterCollectionProps, rewriteNextData, buildIdOf, mergeSettings, splitSettings,
-  allowedChanges, parseCidrs, isInternalPeer, rowKey,
+  allowedChanges, parseCidrs, isInternalPeer, rowKey, isPrivileged, viaRelay,
 } from './filter.mjs';
 
 const {
@@ -48,6 +48,9 @@ const {
   // front of the old fork and comparing before anything depends on this.
   GUARD_MODE = 'enforce',
   INTERNAL_NETWORKS = '172.18.0.0/16,127.0.0.1/32',
+  // The Docker network the public relay tunnel arrives on (compose "relay").
+  // Requests from it may not use accounts that can change Seerr itself.
+  RELAY_NETWORKS = '',
   LOOKUP_BUDGET_MS = '3000',
   STORE_RECHECK_MS = '2000',
 } = process.env;
@@ -55,6 +58,7 @@ const {
 const SHADOW = GUARD_MODE === 'shadow';
 const BUDGET = Number(LOOKUP_BUDGET_MS) || 3000;
 const INTERNAL = parseCidrs(INTERNAL_NETWORKS);
+const RELAY = parseCidrs(RELAY_NETWORKS);
 const UPSTREAM = new URL(SEERR_URL);
 const agent = new http.Agent({ keepAlive: true, maxSockets: 64 });
 
@@ -812,9 +816,63 @@ async function internal(req, res, url) {
 
 /* =================================================================== server */
 
+const HOME_ONLY = 'This account can only be used at home.';
+
+/**
+ * A sign-in through the public relay, refused for accounts that can change
+ * Seerr itself.
+ *
+ * Seerr checks a Jellyfin sign-in by asking Jellyfin from inside Docker, which
+ * Jellyfin trusts as local - so Jellyfin's own "home only" setting on an
+ * administrator does not stop it signing in to Seerr from the internet, and a
+ * Seerr administrator can read every API key. The session Seerr just created is
+ * ended again and its cookie never reaches the visitor.
+ */
+async function relaySignIn(req, res) {
+  const raw = await readBody(req);
+  const up = await fetchUpstream(req, { body: raw });
+  if (up.status >= 200 && up.status < 300 && isJson(up.headers)) {
+    let user = null;
+    try {
+      user = JSON.parse(up.buffer.toString('utf8'));
+    } catch {
+      user = null;
+    }
+    if (user && isPrivileged(user.permissions)) {
+      const sid = [].concat(up.headers['set-cookie'] ?? []).map((c) => /connect\.sid=[^;]+/.exec(c)?.[0]).find(Boolean);
+      if (sid) {
+        fetch(`${SEERR_URL}/api/v1/auth/logout`, { method: 'POST', headers: { cookie: sid }, signal: AbortSignal.timeout(5000) }).catch(() => {});
+      }
+      log(`refused sign-in of ${user.displayName || user.jellyfinUsername || user.email || `#${user.id}`} through the relay: home only`);
+      return sendJson(res, 403, { message: HOME_ONLY }, { 'x-seerr-guard': 'home-only' });
+    }
+  }
+  return relay(res, up);
+}
+
 async function handle(req, res) {
   const url = new URL(req.url, 'http://guard');
   if (url.pathname.startsWith('/__guard/')) return internal(req, res, url);
+
+  if (isPersonal(req.url) && viaRelay(req.socket.remoteAddress, req.headers, INTERNAL, RELAY)) {
+    if (req.method === 'POST' && /^\/api\/v1\/auth\/(jellyfin|local|plex)\/?$/.test(url.pathname)) {
+      return relaySignIn(req, res);
+    }
+    // A session or API key obtained at home is no more welcome here.
+    let caller = null;
+    try {
+      caller = await resolveUser(req);
+    } catch (err) {
+      log(`cannot identify relay caller for ${req.method} ${url.pathname}: ${err.message}`);
+      return sendJson(res, 503, { message: 'Could not verify who you are. Try again in a moment.' }, { 'x-seerr-guard': 'unavailable' });
+    }
+    if (caller && isPrivileged(caller.permissions)) {
+      log(`refused ${req.method} ${url.pathname} for ${caller.name} (#${caller.id}) through the relay: home only`);
+      return url.pathname.startsWith('/api/')
+        ? sendJson(res, 403, { message: HOME_ONLY }, { 'x-seerr-guard': 'home-only' })
+        : sendText(res, 403, HOME_ONLY);
+    }
+  }
 
   const route = classify(req.method, url.pathname);
   if (route.kind === 'pass') return streamProxy(req, res);
