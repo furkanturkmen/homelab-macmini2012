@@ -66,12 +66,13 @@ Each service listens on a "port" (like a channel number on the server). You reac
 - **Nginx Proxy Manager (NPM)** — reverse proxy that turns `jellyfin.yourdomain.internal` into `http://jellyfin:8096` behind the scenes. Port `81` for admin.
 - **Netbird** — free WireGuard-based mesh VPN. Reach your homelab from anywhere. Installed on the host, not in Docker.
 - **gluetun** — WireGuard tunnel that qBittorrent runs inside, so torrent traffic leaves via ProtonVPN instead of your home connection. Everything else keeps the normal route.
+- **dnscrypt-proxy** — sits behind Pi-hole and sends its lookups encrypted (DNS over HTTPS) to Quad9, so the ISP cannot read which domains the household looks up. Port `5053` on the LAN IP.
 - **ntfy** — self-hosted push notifications. Radarr/Sonarr ping it on import, Seerr on request events. Port `8095`.
 - **jellylab-push** — bridges ntfy events into native notifications for the companion iOS app. Port `8099`. Built and working, but parked: Apple only grants the push entitlement to paid Developer Program accounts.
 
 ### Admin
 - **Portainer** — web UI showing every container, click to start/stop/restart. Port `9000`.
-- **Uptime Kuma** — checks each service every minute, alerts you if one dies. Port `3001`.
+- **Uptime Kuma** — checks each service every minute, including real DNS lookups against Pi-hole, and pushes an alert through ntfy if one dies. Port `3001`.
 - **Homarr** — the dashboard you actually open first: one tile per service, plus widgets pulled from their APIs. Port `7575`.
 - **Watchtower** — quietly updates containers to their latest version every night at 4 AM. No web UI.
 
@@ -99,6 +100,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Network | Nginx Proxy Manager | 80 / 443 / 81 | Reverse proxy + HTTPS |
 | Network | Netbird (on host) | — | Mesh VPN for remote access |
 | Network | wg-relay + relay-forward (optional) | — | Tunnel to a relay VPS for public links, off unless `COMPOSE_PROFILES=relay` |
+| Network | dnscrypt-proxy | 5053 | Encrypted upstream DNS for Pi-hole |
 | Network | gluetun | 8083 / 6881 | VPN tunnel qBittorrent runs inside |
 | Network | ntfy | 8095 | Self-hosted push notifications |
 | Network | jellylab-push | 8099 | ntfy to iOS app push bridge |
@@ -214,7 +216,7 @@ Rough phases in [TODO.md](TODO.md):
 1. Install Ubuntu Server on Mac Mini
 2. Set up SSH access and install Docker
 3. Deploy the stack via docker-compose
-4. Run first-run wizards for each service (Portainer, NPM, Nextcloud, Jellyfin, *arr, Jellyseerr), then enable VA-API hardware transcoding for Jellyfin
+4. Run first-run wizards for each service (Portainer, NPM, Nextcloud, Jellyfin, *arr, Jellyseerr, Homarr), then enable VA-API hardware transcoding for Jellyfin
 5. Point your router's DNS at Pi-hole for LAN-wide ad blocking
 6. Install Netbird for remote access
 7. Push notifications on import via ntfy (Radarr/Sonarr/Seerr) — see [TODO.md](TODO.md) Phase 6
@@ -222,7 +224,8 @@ Rough phases in [TODO.md](TODO.md):
 9. Score H.264 above HEVC/AV1 in Sonarr and Radarr, so the server stops transcoding what it cannot hardware-decode — Phase 8
 10. Guard against torrents that are executables wearing a release name, and demote the indexer that served one — Phase 9
 11. Optional: public `https://` links for family and friends through a small relay VPS, with no VPN app for them and one encrypted flow for your ISP to see. Netbird keeps working alongside it — Phase 10
-12. Later: Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
+12. Encrypt Pi-hole's upstream DNS, so the ISP cannot read the household's lookups — Phase 11
+13. Later: Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
 
