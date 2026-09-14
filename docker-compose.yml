@@ -423,56 +423,67 @@ services:
 
   jellyseerr:
     container_name: jellyseerr
-    labels:
-      # Not updated unattended. See the comment on watchtower.
-      com.centurylinklabs.watchtower.enable: "false"
-    # Local build of seerr-team/seerr v3.4.1 (69f73a6f1486) plus per-user
-    # content filtering, which upstream has no notion of - its blocklist is
-    # global and none of its permissions describe content. Source and branch:
-    # github.com/furkanturkmen/seerr feat/per-user-content-filters
+    # Stock Seerr, updated unattended like everything else. The per-user content
+    # filter that used to need a fork of Seerr now lives in seerr-guard below,
+    # which everyone reaches Seerr through. The v3 tag follows 3.x releases
+    # only, so a 4.0 never arrives on its own: move to it deliberately, after
+    # checking the guard's canary monitor still passes.
     #
-    # Rebuild after a rebase, then docker save | ssh homelab docker load, and
-    # bump the tag here:
-    #
-    #   docker build --build-arg COMMIT_TAG=local -t seerr-fork:<tag> .
-    #
-    # The build arg is not optional. Without it the server writes an empty
-    # committag.json while the client bakes in next.config's 'local' fallback,
-    # the two never agree, and every page load shows "Jellyseerr Updated,
-    # please reload" - which reloading cannot fix. 'local' rather than the
-    # upstream sha because this is a fork with its own commits, and a sha here
-    # also makes Jellyseerr ask GitHub how far behind upstream it is and say
-    # so, forever.
-    #
-    # To roll back, put ghcr.io/seerr-team/seerr:latest here: the migrations
-    # only add columns, which stock ignores, so no restore is needed.
-    image: seerr-fork:filters4
+    # No published port. Anything that could reach Seerr directly would get
+    # around the filter, so only the Docker network can - and seerr-guard
+    # publishes 5055 in its place.
+    image: ghcr.io/seerr-team/seerr:v3
     restart: unless-stopped
     environment:
       LOG_LEVEL: info
       TZ: "${TZ}"
       PORT: 5055
-      # ADULT_TAG_IDS would override which TMDB keywords the per-user "hide
-      # adult content" switch stands for, without a rebuild. Left unset, so
-      # the six in server/lib/adultTags apply.
-      #
-      # Dropping 195669 "ecchi" was tried on 2026-09-04 and reverted, because
-      # TMDB's keywords do not separate what it looks like they separate:
-      #
-      #   Adam's Sweet Agony  ecchi                             (hentai)
-      #   No Game No Life     ecchi                             (mainstream)
-      #   Mushoku Tensei      ecchi, erotic                     (mainstream)
-      #   On a Lustful Night  erotic
-      #   Overflow            softcore, ecchi, hentai, erotic
-      #
-      # The first two carry an identical keyword set, so no subset of the six
-      # hides one and shows the other - and Mushoku Tensei is held by erotic
-      # rather than ecchi anyway. Separating these needs a per-title exception,
-      # not a keyword change.
     volumes:
       - ./jellyseerr/config:/app/config
+
+  seerr-guard:
+    container_name: seerr-guard
+    image: node:22-alpine
+    restart: unless-stopped
+    # Per-user content filtering in front of stock Seerr (seerr-guard/). For a
+    # person with no hidden keywords it is a plain proxy. For a filtered person
+    # it removes hidden titles from every list, answers 404 for their pages and
+    # refuses requests for them. It fails closed: an unchecked title or an
+    # unreadable filter store means hidden, never shown.
+    #
+    # Who is filtered lives in jellylab-push-data/content-filters.json, written
+    # only by jellylab-push and mounted read-only here. Its adultTags list is
+    # what the "hide adult content" switch stands for. Dropping 195669 "ecchi"
+    # from it was tried on 2026-09-04 and reverted, because TMDB's keywords do
+    # not separate what they look like they separate:
+    #
+    #   Adam's Sweet Agony  ecchi                             (hentai)
+    #   No Game No Life     ecchi                             (mainstream)
+    #   Mushoku Tensei      ecchi, erotic                     (mainstream)
+    #   On a Lustful Night  erotic
+    #   Overflow            softcore, ecchi, hentai, erotic
+    #
+    # The first two carry an identical keyword set, so no subset hides one and
+    # shows the other. Separating those needs a per-title exception.
+    working_dir: /app
+    command: node /app/guard.mjs
     ports:
       - "5055:5055"
+    environment:
+      TZ: "${TZ}"
+      SEERR_URL: "http://jellyseerr:5055"
+      SEERR_API_KEY: "${JELLYSEERR_API_KEY}"
+      PUSH_URL: "http://jellylab-push:8099"
+      FILTER_STORE_SECRET: "${FILTER_STORE_SECRET}"
+      # Where /__guard/canary and /__guard/decide may be called from: the
+      # default Docker network (Uptime Kuma) and the container itself.
+      INTERNAL_NETWORKS: "172.18.0.0/16,127.0.0.1/32"
+    volumes:
+      - ./seerr-guard:/app:ro
+      - ./seerr-guard-data:/data
+      - ./jellylab-push-data:/filters:ro
+    depends_on:
+      - jellyseerr
 
   # =========================================================
   # GAME SERVER
@@ -542,7 +553,6 @@ services:
       NTFY_TOPIC: "${NTFY_TOPIC}"
       NTFY_USER: "${NTFY_USER}"
       NTFY_PASSWORD: "${NTFY_PASSWORD}"
-      PUSH_REGISTER_SECRET: "${PUSH_REGISTER_SECRET}"
       DEVICES_FILE: "/data/devices.json"
       # Read-only use of the *arr queues, so /downloads can page through the
       # whole thing. The keys live in .env, which is gitignored - the app asks
@@ -552,14 +562,17 @@ services:
       SONARR_API_KEY: "${SONARR_API_KEY}"
       RADARR_URL: "http://radarr:7878"
       RADARR_API_KEY: "${RADARR_API_KEY}"
-      # Jellyseerr's blocklist is global - it has no per-user content
-      # filtering - so only the everyone-filter can be mirrored there.
+      # Seerr directly, not through seerr-guard: this service reads keywords for
+      # the whole library with the API key and must never be filtered itself.
       JELLYSEERR_URL: "http://jellyseerr:5055"
       JELLYSEERR_API_KEY: "${JELLYSEERR_API_KEY}"
       # Its own Jellyfin key, so the content filters can be applied on a timer
       # rather than only when an administrator is signed in and remembers to.
       # The person whose setting changed is usually not an administrator.
       JELLYFIN_API_KEY: "${JELLYFIN_API_KEY}"
+      # Shared with seerr-guard, which sends filter changes made through Seerr's
+      # settings API here. jellylab-push is the only writer of the filter store.
+      FILTER_STORE_SECRET: "${FILTER_STORE_SECRET}"
       # Sonarr and Radarr refresh their queues from qBittorrent once a minute,
       # so anything derived from them is up to a minute stale - over a gigabyte
       # at 20MB/s. Reading the client directly gives live progress and speed,
