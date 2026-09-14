@@ -17,6 +17,7 @@ gluetun/*
 !gluetun/update-qbit-port.sh
 7dtd/
 homarr/
+wg-relay/
 *.env
 .env
 !.env.example
