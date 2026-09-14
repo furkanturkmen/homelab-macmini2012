@@ -88,7 +88,8 @@ Each service listens on a "port" (like a channel number on the server). You reac
 - **Prowlarr** — one place to configure indexers (torrent trackers, Usenet). Feeds Radarr + Sonarr. Port `9696`.
 - **qBittorrent** — download client that Radarr/Sonarr hand jobs to. Port `8083`.
 - **FlareSolverr** — proxy that solves Cloudflare challenges for indexers that require it. Port `8191`.
-- **Jellyseerr** — request UI for friends/family. They log in with their Jellyfin account, search for a title, click Request → Radarr/Sonarr grabs it → shows up in Jellyfin. Port `5055`.
+- **Jellyseerr** (stock Seerr) — request UI for friends/family. They log in with their Jellyfin account, search for a title, click Request → Radarr/Sonarr grabs it → shows up in Jellyfin. Reached through seerr-guard on port `5055`.
+- **seerr-guard** — sits in front of Seerr. With per-user content filters set up, it hides titles by TMDB keyword per person, and jellylab-push makes Jellyfin hide the same titles. Without filters it is a plain proxy. Port `5055`.
 
 ---
 
@@ -118,7 +119,8 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Media | Prowlarr | 9696 | Indexer aggregator |
 | Media | qBittorrent | (via gluetun) | Torrent client, no network of its own |
 | Media | FlareSolverr | 8191 | Cloudflare challenge solver |
-| Media | Jellyseerr | 5055 | Request UI |
+| Media | Jellyseerr (stock Seerr) | — | Request UI, reached through seerr-guard |
+| Media | seerr-guard | 5055 | Per-user content filter in front of Seerr |
 
 ---
 
@@ -225,7 +227,8 @@ Rough phases in [TODO.md](TODO.md):
 10. Guard against torrents that are executables wearing a release name, and demote the indexer that served one — Phase 9
 11. Optional: public `https://` links for family and friends through a small relay VPS, with no VPN app for them and one encrypted flow for your ISP to see. Netbird keeps working alongside it — Phase 10
 12. Encrypt Pi-hole's upstream DNS, so the ISP cannot read the household's lookups — Phase 11
-13. Later: Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
+13. Optional: per-user content filters in Seerr and Jellyfin, on stock Seerr that updates itself — Phase 12
+14. Later: Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
 
 ---
 
