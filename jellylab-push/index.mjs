@@ -165,12 +165,17 @@ function byTmdbId(records, pick, live = {}) {
    * separate torrents do not. So dedupe by hash, then add up what is left.
    */
   const byId = {};
+  // The seasons each download covers. Gathered from every row before the
+  // dedupe below keeps one per hash, because a two-season pack is one hash
+  // across rows of both seasons.
+  const seasonsOf = {};
   for (const r of records) {
     const tmdbId = pick(r)?.tmdbId;
     if (!tmdbId) continue;
     // A row with no downloadId cannot be grouped with anything, so it counts
     // as its own download rather than silently merging with another.
     const hash = (r.downloadId ?? '').toLowerCase() || `row:${r.id ?? Math.random()}`;
+    if (typeof r.seasonNumber === 'number') (seasonsOf[hash] ??= new Set()).add(r.seasonNumber);
     const m = byId[tmdbId] ?? (byId[tmdbId] = new Map());
     const prev = m.get(hash);
     if (!prev || (r.size ?? 0) > (prev.size ?? 0)) m.set(hash, r);
@@ -178,88 +183,113 @@ function byTmdbId(records, pick, live = {}) {
 
   const out = {};
   for (const [tmdbId, m] of Object.entries(byId)) {
-    const rows = [...m.values()];
-    const left = rows.reduce((a, x) => a + (x.sizeleft ?? x.sizeLeft ?? 0), 0);
-    const size = rows.reduce((a, x) => a + (x.size ?? 0), 0);
-    /*
-     * The one still going, because that is what the title, the ETA and the
-     * stall reason should describe - the download you are waiting on, not
-     * whichever happens to be biggest. With everything finished it falls back
-     * to the largest, which is the one that mattered.
-     */
-    const r = rows.reduce((a, x) =>
-      ((x.sizeleft ?? x.sizeLeft ?? 0) > (a.sizeleft ?? a.sizeLeft ?? 0) ? x : a), rows[0]);
-    const hash = (r.downloadId ?? '').toLowerCase();
+    const entries = [...m.entries()];
+    out[tmdbId] = summarise(entries.map(([, r]) => r), live);
 
-    out[tmdbId] = {
-      size,
-      sizeLeft: left,
-      percent: size > 0 ? Math.max(0, Math.min(1, (size - left) / size)) : null,
-      // How many separate downloads this series is arriving as. One for a
-      // season pack or a single episode; the app can say "8 files" rather
-      // than implying the bar describes one thing.
-      parts: rows.length,
-      // Sonarr says "warning" for a stalled torrent and puts the reason in
-      // errorMessage; that is worth showing, because a stalled download and a
-      // slow one look identical from a percentage alone.
-      status: r.trackedDownloadState ?? r.status ?? null,
-      stalled: /stalled|no connections/i.test(r.errorMessage ?? ''),
-      title: r.title ?? null,
-      /*
-       * Enough to answer "how is it going" without a second service.
-       *
-       * qBittorrent has the live speed and the seed count, but reading it
-       * would mean either a password in another place or opening its web UI to
-       * every container on the docker network. Average speed is derivable from
-       * what is already here - bytes done over time elapsed - and that is the
-       * number worth knowing anyway: a torrent that has averaged 2MB/s over
-       * ten hours is a different situation from one that briefly touched 20.
-       */
-      added: r.added ?? null,
-      timeLeft: r.timeleft ?? null,
-      indexer: r.indexer ?? null,
-      client: r.downloadClient ?? null,
-      /*
-       * What was actually chosen, so the app can show it rather than only how
-       * far along it is.
-       *
-       * The score is the interesting one. A release carrying PROPER in its
-       * title outranks everything on revision alone, ahead of any custom
-       * format score, so a negative score on a download in progress means the
-       * ranking picked something the profile actively did not want.
-       */
-      quality: r.quality?.quality?.name ?? null,
-      score: r.customFormatScore ?? null,
-      languages: (r.languages ?? []).map(l => l?.name).filter(Boolean),
-      // Sonarr's own words for why it is stuck. "The download is stalled with
-      // no connections" is the seed count expressed as a symptom, and unlike a
-      // seed count it needs no second credential to read.
-      error: r.errorMessage ?? null,
-      /*
-       * Straight from qBittorrent, when it could be reached.
-       *
-       * Kept beside the *arr figures rather than replacing them: the app has
-       * to render when this service has no qBittorrent password, and a screen
-       * that works only when every credential is present is worse than one
-       * that degrades.
-       */
-      ...(hash && live[hash]
-        ? {
-            livePercent: live[hash].percent,
-            liveSpeed: live[hash].speed,
-            seeders: live[hash].seeders,
-            seedersTotal: live[hash].seedersTotal,
-            peers: live[hash].peers,
-            clientState: live[hash].state,
-            // Seconds. qBittorrent uses 8640000 - a hundred days - to mean it
-            // has no idea, which the app treats as no answer rather than as a
-            // very long wait.
-            eta: live[hash].eta,
-          }
-        : {}),
-    };
+    /*
+     * And each download on its own, with the seasons it covers.
+     *
+     * A series is one entry however many seasons are coming down, and the app
+     * files a request per season selection - so two requests for one series
+     * drew the same bar. Ted Lasso's seasons three and four arrived as a pack
+     * and four single episodes, and a request for either could only show both.
+     * These let the app add up just the downloads a request is about. The
+     * series total above stays, for anything that wants the whole picture.
+     */
+    if (entries.some(([hash]) => seasonsOf[hash])) {
+      out[tmdbId].grabs = entries.map(([hash, r]) => ({
+        seasons: [...(seasonsOf[hash] ?? [])].sort((a, b) => a - b),
+        ...summarise([r], live),
+      }));
+    }
   }
   return out;
+}
+
+/**
+ * One title's downloads added up: sizes summed, everything descriptive taken
+ * from the download still going.
+ */
+function summarise(rows, live) {
+  const left = rows.reduce((a, x) => a + (x.sizeleft ?? x.sizeLeft ?? 0), 0);
+  const size = rows.reduce((a, x) => a + (x.size ?? 0), 0);
+  /*
+   * The one still going, because that is what the title, the ETA and the
+   * stall reason should describe - the download you are waiting on, not
+   * whichever happens to be biggest. With everything finished it falls back
+   * to the largest, which is the one that mattered.
+   */
+  const r = rows.reduce((a, x) =>
+    ((x.sizeleft ?? x.sizeLeft ?? 0) > (a.sizeleft ?? a.sizeLeft ?? 0) ? x : a), rows[0]);
+  const hash = (r.downloadId ?? '').toLowerCase();
+
+  return {
+    size,
+    sizeLeft: left,
+    percent: size > 0 ? Math.max(0, Math.min(1, (size - left) / size)) : null,
+    // How many separate downloads this series is arriving as. One for a
+    // season pack or a single episode; the app can say "8 files" rather
+    // than implying the bar describes one thing.
+    parts: rows.length,
+    // Sonarr says "warning" for a stalled torrent and puts the reason in
+    // errorMessage; that is worth showing, because a stalled download and a
+    // slow one look identical from a percentage alone.
+    status: r.trackedDownloadState ?? r.status ?? null,
+    stalled: /stalled|no connections/i.test(r.errorMessage ?? ''),
+    title: r.title ?? null,
+    /*
+     * Enough to answer "how is it going" without a second service.
+     *
+     * qBittorrent has the live speed and the seed count, but reading it
+     * would mean either a password in another place or opening its web UI to
+     * every container on the docker network. Average speed is derivable from
+     * what is already here - bytes done over time elapsed - and that is the
+     * number worth knowing anyway: a torrent that has averaged 2MB/s over
+     * ten hours is a different situation from one that briefly touched 20.
+     */
+    added: r.added ?? null,
+    timeLeft: r.timeleft ?? null,
+    indexer: r.indexer ?? null,
+    client: r.downloadClient ?? null,
+    /*
+     * What was actually chosen, so the app can show it rather than only how
+     * far along it is.
+     *
+     * The score is the interesting one. A release carrying PROPER in its
+     * title outranks everything on revision alone, ahead of any custom
+     * format score, so a negative score on a download in progress means the
+     * ranking picked something the profile actively did not want.
+     */
+    quality: r.quality?.quality?.name ?? null,
+    score: r.customFormatScore ?? null,
+    languages: (r.languages ?? []).map(l => l?.name).filter(Boolean),
+    // Sonarr's own words for why it is stuck. "The download is stalled with
+    // no connections" is the seed count expressed as a symptom, and unlike a
+    // seed count it needs no second credential to read.
+    error: r.errorMessage ?? null,
+    /*
+     * Straight from qBittorrent, when it could be reached.
+     *
+     * Kept beside the *arr figures rather than replacing them: the app has
+     * to render when this service has no qBittorrent password, and a screen
+     * that works only when every credential is present is worse than one
+     * that degrades.
+     */
+    ...(hash && live[hash]
+      ? {
+          livePercent: live[hash].percent,
+          liveSpeed: live[hash].speed,
+          seeders: live[hash].seeders,
+          seedersTotal: live[hash].seedersTotal,
+          peers: live[hash].peers,
+          clientState: live[hash].state,
+          // Seconds. qBittorrent uses 8640000 - a hundred days - to mean it
+          // has no idea, which the app treats as no answer rather than as a
+          // very long wait.
+          eta: live[hash].eta,
+        }
+      : {}),
+  };
 }
 
 /** What a dead Radarr or Sonarr returns, so the shape never varies. */
