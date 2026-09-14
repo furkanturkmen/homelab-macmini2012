@@ -118,7 +118,7 @@ function fakeSeerr() {
     }
     if (p === '/api/v1/search') return json(res, 200, SEARCH_BODY, req);
     if (p === '/api/v1/discover/movies') return json(res, 200, { results: [{ id: 200, mediaType: 'movie' }, { id: 301, mediaType: 'movie' }] });
-    if (p === '/api/v1/discover/keyword/5/movies') return json(res, 200, { results: [{ id: 100, mediaType: 'movie' }, { id: 200, mediaType: 'movie' }] });
+    if (p === '/api/v1/discover/keyword/5/movies') return json(res, 200, { results: [{ id: 100, mediaType: 'movie' }, { id: 200, mediaType: 'movie' }] }, req);
     if (p === '/api/v1/request/1') return json(res, 200, { id: 1, media: { id: 7, tmdbId: 100, mediaType: 'movie' } });
     if (p === '/api/v1/request' && req.method === 'POST') {
       seen.requests.push(JSON.parse(await readAll(req)));
