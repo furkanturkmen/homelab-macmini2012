@@ -87,6 +87,18 @@ services:
       - wg-relay
     command: "TCP-LISTEN:443,fork,reuseaddr TCP:npm:443"
 
+  relay-forward-http:
+    container_name: relay-forward-http
+    image: alpine/socat:latest
+    restart: unless-stopped
+    # Port 80 on the tunnel address, for certificate verification only. The VPS
+    # passes nothing here except /.well-known/acme-challenge/ for the public
+    # names, so the plain-HTTP admin hosts in npm stay unreachable from outside.
+    network_mode: "service:wg-relay"
+    depends_on:
+      - wg-relay
+    command: "TCP-LISTEN:80,fork,reuseaddr TCP:npm:80"
+
   # =========================================================
   # ADMIN
   # =========================================================
