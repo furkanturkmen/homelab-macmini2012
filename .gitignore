@@ -13,6 +13,7 @@ qbittorrent/
 jellyseerr/
 ntfy/
 jellylab-push-data/
+seerr-guard-data/
 gluetun/*
 !gluetun/update-qbit-port.sh
 7dtd/
