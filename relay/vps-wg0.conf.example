@@ -1,0 +1,14 @@
+# VPS: /etc/wireguard/wg0.conf  (TODO.md Phase 10)
+# Generate the key once:  umask 077; wg genkey > /etc/wireguard/relay.key
+#                         wg pubkey < /etc/wireguard/relay.key > /etc/wireguard/relay.pub
+# The private key stays in its own file and is loaded by PostUp, so this config
+# can be read or pasted into a support ticket without leaking it.
+[Interface]
+Address = 10.77.0.1/24
+ListenPort = 51820
+PostUp = wg set %i private-key /etc/wireguard/relay.key
+
+[Peer]
+# home: the wg-relay container
+PublicKey = <home public key>
+AllowedIPs = 10.77.0.2/32
