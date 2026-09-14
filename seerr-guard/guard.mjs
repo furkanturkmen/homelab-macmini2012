@@ -15,9 +15,10 @@
  * Seerr's own detail endpoint returns.
  *
  * Fails closed. A title that has not been checked yet, a filter store that
- * cannot be read, or a person who cannot be identified all mean "hide" for
- * anyone who might be filtered. The worst case is a short page for a child, not
- * an unfiltered one.
+ * exists but cannot be read, or a person who cannot be identified all mean
+ * "hide" for anyone who might be filtered. The worst case is a short page for a
+ * child, not an unfiltered one. (No store file at all means no filters were
+ * ever set up, and nobody is filtered.)
  *
  * The rules live in filter.mjs, which does no I/O and is covered by
  * test/filter.test.mjs. No npm dependencies: stock node image, file mounted in.
@@ -229,6 +230,19 @@ async function currentStore() {
       log(`filter store ${wasBroken ? 'loaded' : 'reloaded'}: ${store.users.size} people${store.canary ? ', canary configured' : ''}`);
     }
   } catch (err) {
+    if (err.code === 'ENOENT') {
+      /*
+       * No store at all means nobody is filtered, the same as jellylab-push
+       * reads it. Without this a stack that never set up filters would lock
+       * every non-admin out of Seerr. A store that exists and cannot be parsed
+       * is the dangerous case, and that one still fails closed below. Where
+       * filters are in use, the canary monitor turns red the moment the file
+       * disappears, because the canary lives in it.
+       */
+      if (!storeState.missing) log('no filter store: nobody is filtered');
+      storeState = { ok: true, missing: true, error: null, store: { users: new Map(), adultTags: [], canary: null }, mtimeMs: -1, checkedAt: now };
+      return storeState;
+    }
     if (storeState.ok || storeState.error !== err.message) log(`filter store unavailable, failing closed: ${err.message}`);
     storeState = { ok: false, error: err.message, store: null, mtimeMs: -1, checkedAt: now };
   }
