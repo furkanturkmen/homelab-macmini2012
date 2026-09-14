@@ -63,9 +63,39 @@ const {
   // Optional, like qBittorrent.
   PROWLARR_URL = 'http://prowlarr:9696',
   PROWLARR_API_KEY = '',
+  // Shared with seerr-guard, which sends filter changes made through Seerr's
+  // settings API here instead of writing the store itself.
+  FILTER_STORE_SECRET = '',
+  // Where the filter page may be opened and signed into from. Home networks
+  // only: an administrator account that may only sign in at home must not be
+  // reachable from the mesh VPN through this page.
+  ADMIN_NETWORKS = '192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.1/32',
 } = process.env;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
+
+/** `192.168.0.0/16,10.0.0.0/8` into ranges; IPv4 only, bad entries dropped. */
+function parseCidrs(text) {
+  const toNum = (ip) => {
+    const parts = String(ip).replace(/^::ffff:/, '').split('.');
+    if (parts.length !== 4 || parts.some(p => !/^\d{1,3}$/.test(p) || Number(p) > 255)) return null;
+    return parts.reduce((n, p) => n * 256 + Number(p), 0);
+  };
+  const ranges = [];
+  for (const raw of String(text).split(',')) {
+    const [base, bits = '32'] = raw.trim().split('/');
+    const start = toNum(base);
+    if (start === null || !(Number(bits) >= 0 && Number(bits) <= 32)) continue;
+    const size = 2 ** (32 - Number(bits));
+    ranges.push({ first: start - (start % size), last: start - (start % size) + size - 1 });
+  }
+  return { ranges, toNum };
+}
+const adminNets = parseCidrs(ADMIN_NETWORKS);
+const fromHomeNetwork = (req) => {
+  const n = adminNets.toNum(req.socket.remoteAddress ?? '');
+  return n !== null && adminNets.ranges.some(r => n >= r.first && n <= r.last);
+};
 
 const send = (res, code, obj) => {
   res.writeHead(code, { 'content-type': 'application/json' });
@@ -954,6 +984,9 @@ async function cancel({ tmdbId, type, season }) {
   };
 }
 
+/** Routes that belong to the filter page and answer only on the home network. */
+const FILTER_PAGE_ROUTES = new Set(['/filters/admin', '/filters/login', '/filters/content', '/filters/keywords', '/filters/keyword-names']);
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
 
@@ -1050,18 +1083,6 @@ const server = createServer(async (req, res) => {
     }
   }
 
-  /**
-   * Make Jellyfin match what Jellyseerr says each person may not see.
-   *
-   * Jellyseerr's per-user blockedTags is the only place this is decided, and
-   * the fork it runs is what makes that field exist. Everything else - the
-   * crawler's tag list, the markers on library items, every Jellyfin policy -
-   * is worked out from it here and stored nowhere, so removing a keyword from
-   * somebody in Jellyseerr removes it everywhere and nothing puts it back.
-   *
-   * That is the whole point of the arrangement: the app is a client for two
-   * servers rather than a third place where the truth lives.
-   */
   /*
    * Take the app's own log and keep it where it can be read.
    *
@@ -1097,6 +1118,14 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  /**
+   * Make Jellyfin match the filter store now, rather than at the next tick.
+   *
+   * The store (content-filters.json) is the only place a filter is decided.
+   * seerr-guard reads it to filter Seerr; this makes Jellyfin hide the same
+   * titles. Administrator only, checked against Jellyfin with the caller's own
+   * token, which is forwarded and never stored.
+   */
   if (url.pathname === '/filters/apply' && req.method === 'POST') {
     const token = req.headers['x-emby-token'];
     try {
@@ -1105,6 +1134,95 @@ const server = createServer(async (req, res) => {
       return send(res, 200, out);
     } catch (err) {
       return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
+  /*
+   * The filter page: pick a person, choose which keywords are hidden from them.
+   *
+   * It replaces the picker the Seerr fork added to Seerr's own user settings,
+   * which stock Seerr does not have. Home networks only, and every change needs
+   * an administrator signed in with their Jellyfin password.
+   */
+  if (FILTER_PAGE_ROUTES.has(url.pathname) && !fromHomeNetwork(req)) {
+    return send(res, 403, { error: 'the filter page is only available on the home network' });
+  }
+
+  if (url.pathname === '/filters/admin' && req.method === 'GET') {
+    try {
+      const page = await readFile(new URL('./filters-admin.html', import.meta.url));
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(page);
+    } catch (err) {
+      return send(res, 500, { error: `filter page missing: ${err.message}` });
+    }
+  }
+
+  if (url.pathname === '/filters/login' && req.method === 'POST') {
+    try {
+      const { username, password } = JSON.parse((await readText(req)) || '{}');
+      const out = await filters.signInAdmin(username, password);
+      log(`filter page: ${out.name} signed in`);
+      return send(res, 200, out);
+    } catch (err) {
+      return send(res, err.status ?? 400, { error: err.message });
+    }
+  }
+
+  if (url.pathname === '/filters/content' && req.method === 'GET') {
+    const token = req.headers['x-emby-token'];
+    try {
+      await filters.requireAdmin(token);
+      const [doc, people] = await Promise.all([filters.loadContent(), filters.jellyfinPeople(token)]);
+      return send(res, 200, { doc, people });
+    } catch (err) {
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
+  if (url.pathname === '/filters/keywords' && req.method === 'GET') {
+    try {
+      await filters.requireAdmin(req.headers['x-emby-token']);
+      return send(res, 200, await filters.searchKeywords(url.searchParams.get('query')));
+    } catch (err) {
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
+  if (url.pathname === '/filters/keyword-names' && req.method === 'GET') {
+    try {
+      await filters.requireAdmin(req.headers['x-emby-token']);
+      return send(res, 200, await filters.keywordNames(url.searchParams.get('ids')));
+    } catch (err) {
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
+  /**
+   * Change one person's filter.
+   *
+   * Two callers. The filter page, as a signed-in administrator on the home
+   * network. And seerr-guard, which forwards what somebody saved through Seerr's
+   * settings API (the JellyLab app's adult switch) after applying the fork's
+   * permission rules - it proves itself with the shared secret instead.
+   */
+  const personMatch = /^\/filters\/content\/([^/]+)$/.exec(url.pathname);
+  if (personMatch && req.method === 'PUT') {
+    const secret = req.headers['x-filter-store-secret'];
+    try {
+      if (!(FILTER_STORE_SECRET && secret === FILTER_STORE_SECRET)) {
+        if (!fromHomeNetwork(req)) throw Object.assign(new Error('home network only'), { status: 403 });
+        await filters.requireAdmin(req.headers['x-emby-token']);
+      }
+      const changes = JSON.parse((await readText(req)) || '{}');
+      const entry = await filters.setPersonFilters(decodeURIComponent(personMatch[1]), changes);
+      log(`filter store: ${entry.name ?? personMatch[1]} -> ${entry.blockedTags.length} keyword(s), adult switch ${entry.hideAdult ? 'on' : 'off'}`);
+      if (JELLYFIN_API_KEY) {
+        runFilterSync(JELLYFIN_API_KEY, 'changed', false).catch(e => log(`filter sync failed: ${e.message}`));
+      }
+      return send(res, 200, entry);
+    } catch (err) {
+      return send(res, err.status ?? (err instanceof SyntaxError ? 400 : 500), { error: err.message });
     }
   }
 
@@ -1291,12 +1409,10 @@ setTimeout(sweepOne, 10000).unref();
 /*
  * Apply the content filters on a timer.
  *
- * Until now nothing did. The screen in the app that called /filters/apply was
- * removed when the filters moved into Jellyseerr, so a change made there -
- * an administrator editing someone's hidden tags, or anybody using their own
- * adult switch - reached Jellyseerr immediately and the Jellyfin library
- * never, until somebody remembered to POST this by hand. A filter that only
- * applies when you remember it is not a filter.
+ * A change saved through the filter page or seerr-guard triggers a sync
+ * straight away. The timer catches everything else: titles newly added to the
+ * library carry no markers until a sync has looked at their keywords, and a
+ * filter that only applies when somebody remembers to run it is not a filter.
  *
  * The service holds its own Jellyfin key for this, the way it already holds
  * the *arr keys: the trigger cannot be a signed-in administrator, because the
@@ -1334,16 +1450,15 @@ async function runFilterSync(token, why, quiet) {
     let out;
     do {
       filterSyncAgain = false;
-      out = await filters.syncFromJellyseerr(token);
+      out = await filters.syncContentFilters(token);
       const changed = out.stamped.length + out.cleared.length + out.applied.length;
       // On the timer, say nothing when there was nothing to do. Ten minutes of
       // "no change" forever buries the lines that matter.
-      if (!quiet || changed || out.crawlStarted) {
+      if (!quiet || changed || out.lookupFailures) {
         log(`filter sync (${why}): ${out.people.length} people, ${out.tags.length} tag(s)`
-          + `, library +${out.stamped.length} -${out.cleared.length}`
+          + `, library ${out.library} title(s) +${out.stamped.length} -${out.cleared.length}`
           + `, ${out.applied.length} jellyfin policy change(s)`
-          + `${out.crawlStarted ? ', crawl started' : ''}`
-          + `${out.crawlBusy ? ', crawl already running' : ''}`);
+          + `${out.lookupFailures ? `, ${out.lookupFailures} keyword lookup(s) failed` : ''}`);
       }
     } while (filterSyncAgain);
     return out;
