@@ -768,6 +768,22 @@ async function canaryEndpoint(res) {
       const body = await r.json();
       return (body.results ?? []).some((row) => rowKey(row) === canary.hiddenTitle) ? 'hidden title is listed' : null;
     });
+    // The device-cache leak: revalidating a copy an unfiltered person cached
+    // must not come back as 304. Seerr's own ETag for the unfiltered list is
+    // exactly what such a device would hold.
+    await check('cached unfiltered copy', async () => {
+      const direct = await fetch(`${SEERR_URL}/api/v1/discover/keyword/${canary.keywordId}/movies`, {
+        headers: { 'x-api-key': SEERR_API_KEY },
+        signal: AbortSignal.timeout(20000),
+      });
+      const etag = direct.headers.get('etag');
+      if (!etag) return null;
+      const r = await get(`/api/v1/discover/keyword/${canary.keywordId}/movies`, { 'if-none-match': etag });
+      if (r.status === 304) return 'a cached unfiltered copy was revalidated with 304';
+      if (r.status !== 200) return `expected 200, got ${r.status}`;
+      const body = await r.json();
+      return (body.results ?? []).some((row) => rowKey(row) === canary.hiddenTitle) ? 'hidden title is listed' : null;
+    });
   }
 
   if (failures.length) {
