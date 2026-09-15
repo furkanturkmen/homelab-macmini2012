@@ -1,0 +1,28 @@
+# Home: ~/homelab/wg-home/wg_confs/wghome.conf  (gitignored; docs/10-public-relay.md Step 10.9)
+# WireGuard server for your own devices, reached through the relay VPS.
+# Generate the key without installing anything on the host:
+#   mkdir -p wg-home/wg_confs && chmod 700 wg-home
+#   (umask 077; docker run --rm --entrypoint wg lscr.io/linuxserver/wireguard genkey > wg-home/wghome.key)
+#   docker run --rm -i --entrypoint wg lscr.io/linuxserver/wireguard pubkey < wg-home/wghome.key
+[Interface]
+Address = 10.78.0.1/24
+# Not 51820: Netbird on the host already listens there.
+ListenPort = 51821
+PostUp = wg set %i private-key /config/wghome.key
+# Docker sets the host's FORWARD policy to DROP and leaves DOCKER-USER for rules
+# of your own. Tunnel devices may reach the LAN and published ports; replies
+# come back. LAN devices see the Mac Mini's address (masquerade), containers see
+# the tunnel address. Replace enp1s0f0 with the LAN interface (ip -brief addr).
+PostUp = iptables -I DOCKER-USER -i %i -j ACCEPT
+PostUp = iptables -I DOCKER-USER -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -s 10.78.0.0/24 -o enp1s0f0 -j MASQUERADE
+PostDown = iptables -D DOCKER-USER -i %i -j ACCEPT
+PostDown = iptables -D DOCKER-USER -o %i -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -s 10.78.0.0/24 -o enp1s0f0 -j MASQUERADE
+
+# One block per device. The device makes its own key pair; only its public key
+# comes here. Remove the block when a device is lost.
+[Peer]
+# phone
+PublicKey = <the device's public key>
+AllowedIPs = 10.78.0.2/32

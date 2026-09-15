@@ -7,6 +7,15 @@
 Address = 10.77.0.1/24
 ListenPort = 51820
 PostUp = wg set %i private-key /etc/wireguard/relay.key
+# Optional, Step 10.9: WireGuard for your own devices. The server is at home
+# (wg-home); this only passes its UDP down the tunnel, untouched, and holds no
+# key for it. SNAT so the replies come back this way. Replace eth0 with the
+# public interface (ip -brief addr). Also needs net.ipv4.ip_forward=1 and
+#   ufw route allow in on eth0 out on wg0 to 10.77.0.2 port 51821 proto udp
+PostUp = iptables -t nat -A PREROUTING -i eth0 -p udp --dport 51821 -j DNAT --to-destination 10.77.0.2:51821
+PostUp = iptables -t nat -A POSTROUTING -o %i -p udp -d 10.77.0.2 --dport 51821 -j SNAT --to-source 10.77.0.1
+PostDown = iptables -t nat -D PREROUTING -i eth0 -p udp --dport 51821 -j DNAT --to-destination 10.77.0.2:51821
+PostDown = iptables -t nat -D POSTROUTING -o %i -p udp -d 10.77.0.2 --dport 51821 -j SNAT --to-source 10.77.0.1
 
 [Peer]
 # home: the wg-relay container

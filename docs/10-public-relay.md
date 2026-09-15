@@ -339,6 +339,9 @@ Nothing to install, and no VPN. For each person:
    A locked account is re-enabled by an administrator. If the only
    administrator is the one locked, the API key still works:
    `POST /Users/<id>/Policy` with the user's policy and `"IsDisabled": false`.
+   Do not call the administrator `admin`: it is the first name bots try, and
+   they can lock it even when they cannot get in. Renaming it in Jellyfin
+   changes nothing else, because Seerr links accounts by Jellyfin user id.
 2. Two links:
    - `https://jellyfin.yourdomain.tld` to watch, in a browser or as the server
      address in any Jellyfin app;
@@ -350,6 +353,119 @@ Nothing to install, and no VPN. For each person:
 
 Test once on mobile data with Wi-Fi and Netbird off. That is the only way to
 see what a friend sees.
+
+## Step 10.9 — Optional: WireGuard for your own devices
+
+The public names are for watching and requesting. Managing the homelab from
+away (the *arr apps, Portainer, Pi-hole, SSH, the administrator account) still
+needs a VPN, and should: none of that belongs on the internet. Netbird
+(Phase 5) does that job. This step is the alternative that runs entirely on
+your own machines, through the relay you already have. Use one or the other.
+
+```
+phone ──WireGuard (UDP 51821)──> VPS ──wg0 tunnel──> wg-relay ──> wg-home (host) ──> LAN
+         encrypted end to end: the VPS and wg-relay only pass it on, and hold no key
+```
+
+The server is **at home**, not on the VPS. A WireGuard hub on the VPS would be
+simpler, but whoever gets into the VPS would then be on your LAN. This way the
+VPS forwards packets it cannot read or forge.
+
+1. **Home server.** Generate a key and write `wg-home/wg_confs/wghome.conf` from
+   [`relay/home-wghome.conf.example`](../relay/home-wghome.conf.example)
+   (`wg-home/` is gitignored), then `docker compose up -d wg-home`. It runs on
+   the host network, in the `relay` profile, so devices arrive with their own
+   tunnel address and reach the LAN the way a Netbird route does. It listens
+   on 51821, because Netbird already has 51820.
+2. **Home tunnel.** Add the "Step 10.9" lines from
+   [`relay/home-wg0.conf.example`](../relay/home-wg0.conf.example) to
+   `wg-relay/wg_confs/wg0.conf`, then restart it **and then** the forwarders:
+   ```bash
+   docker compose restart wg-relay
+   docker compose restart relay-forward relay-forward-http
+   ```
+   The order matters. The forwarders live in wg-relay's network namespace, and
+   restarting all three in one command started them before wg-relay: they kept
+   the old, dead namespace and both public names were down until they were
+   restarted again. It is the same reason the three are opted out of
+   Watchtower. The UDP forward is the only thing wg-relay passes on; everything
+   else from the VPS is still dropped.
+3. **VPS.** Add the "Step 10.9" lines from
+   [`relay/vps-wg0.conf.example`](../relay/vps-wg0.conf.example), then:
+   ```bash
+   echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-relay-forward.conf && sysctl -p /etc/sysctl.d/99-relay-forward.conf
+   ufw route allow in on eth0 out on wg0 to 10.77.0.2 port 51821 proto udp
+   systemctl restart wg-quick@wg0
+   ```
+   ufw's routed policy stays deny, so that one route is all the VPS forwards.
+   Restarting wg0 drops the public names for a moment; the home end reconnects
+   by itself within a couple of minutes.
+4. **Jellyfin.** Add `10.78.0.0/24` to the LAN networks (Step 10.5), so your
+   devices count as home: the administrator can sign in and no bitrate cap
+   applies.
+5. **Each device**, in the WireGuard app: create a tunnel from scratch and let
+   the app **generate the key pair**; only the public key leaves the device.
+   - Addresses `10.78.0.2/32` (the next device `.3`), DNS the Mac Mini's LAN IP
+     (Pi-hole), **MTU `1340`**
+   - Peer: the public key of `wghome.key`, endpoint `<VPS_IP>:51821`, allowed
+     IPs `10.78.0.0/24, <your LAN subnet>`
+   - On iOS, **On-Demand**: on for mobile data and for Wi-Fi *except* your home
+     network, so it is only on when you are away.
+
+   Add the device's public key as a `[Peer]` in `wghome.conf` and
+   `docker compose restart wg-home`. A lost device is one block to delete.
+
+The MTU leaves room for the wrapping: this tunnel travels inside the relay
+tunnel, whose own MTU is 1420 and which adds up to 80 bytes, so 1340 fits
+without fragmenting.
+
+Check it at home:
+
+```bash
+docker exec wg-home wg show wghome   # "latest handshake" for each device
+```
+
+From the device, open `http://<mac-mini-ip>:8096`. With an API key,
+`/System/Endpoint` there answers `"IsInNetwork":true`. This was tested with a throwaway client
+going out to the VPS's public address and back in: handshake, the LAN, Pi-hole
+and a 500 KB download at MTU 1340.
+
+## Step 10.10 — The JellyLab app through the public names
+
+The JellyLab app finds `jellylab-push` (free space, download progress, cancel)
+on the Jellyfin address with port 8099. On a public `https://` name that port is
+not reachable, and must not be: the service has no sign-in of its own, and
+`/cancel` deletes a running download. So npm serves it on the public Jellyfin
+name instead, and the service decides what a visitor from outside may do.
+
+1. In npm, edit the Jellyfin proxy host → **Custom Locations** → add
+   `/jellylab-push`, scheme `http`, host `jellylab-push`, port `8099`. Check
+   afterwards that Force SSL is still on (Step 10.6).
+2. `INTERNAL_NETWORKS` and `RELAY_NETWORKS` on `jellylab-push` in
+   `docker-compose.yml` are the same as on seerr-guard. npm's custom location
+   sets `X-Forwarded-For` to the connecting address itself, so a visitor cannot
+   pretend to be at home.
+3. A JellyLab build that uses `https://<name>/jellylab-push` for an `https`
+   address without a port, and sends the Jellyfin token with its reads
+   (jellylab PR #2).
+
+What a visitor through the relay gets:
+
+| | Outside | At home |
+|---|---|---|
+| Free space, download progress, filter names | with a Jellyfin sign-in | always |
+| Cancel, stop a search, release check, app logs | refused ("Only available at home") | yes |
+| The filter page | refused | yes |
+
+```bash
+B=https://jellyfin.yourdomain.tld/jellylab-push
+curl -s -o /dev/null -w "%{http_code}\n" $B/storage                                 # 401
+curl -s -o /dev/null -w "%{http_code}\n" -H "X-Emby-Token: <token>" $B/storage       # 200
+curl -s -o /dev/null -w "%{http_code}\n" -X POST -H "X-Emby-Token: <token>" $B/cancel # 403
+```
+
+At home the service still asks for nothing, as before. Anyone on the LAN, or on
+a mesh VPN you let reach port 8099, can cancel a download.
 
 ---
 
