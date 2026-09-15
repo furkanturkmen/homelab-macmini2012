@@ -1242,9 +1242,8 @@ something Netbird cannot: a normal `https://` address that family and friends
 open in a browser or the Jellyfin app, with nothing to install. The two run
 side by side.
 
-> **Status:** Steps 10.1–10.5 are built and verified. Certificates and the
-> public npm proxy hosts are still being set up and will be written up here
-> once they work.
+> **Status:** built and verified end to end, with Jellyfin and Seerr both
+> public.
 
 ### Why a relay VPS and not the alternatives
 
@@ -1262,7 +1261,8 @@ forwarded on the home router.
 
 ```
 friend ──https──> VPS :443 ──WireGuard──> wg-relay ──> relay-forward ──> npm ──> jellyfin
-                  (reads SNI only)         (home, outbound tunnel)
+                  (reads SNI,              (home, outbound tunnel)          └──> seerr-guard ──> Seerr
+                   checks country)
 at home: Pi-hole answers the same name with the LAN IP, so home traffic stays home
 ```
 
@@ -1317,7 +1317,7 @@ paste it there.
 
 ```bash
 apt update && apt upgrade -y
-apt install -y wireguard-tools nginx libnginx-mod-stream ufw
+apt install -y wireguard-tools nginx libnginx-mod-stream libnginx-mod-stream-geoip2 mmdb-bin ufw
 rm /etc/nginx/sites-enabled/default
 
 ufw default deny incoming
@@ -1369,11 +1369,48 @@ them apart from the services that run next to it.
 Two nginx configs on the VPS:
 
 - [`relay/stream-relay.conf.example`](relay/stream-relay.conf.example):
-  port 443. It passes TLS through by hostname and drops everything not on the
-  list.
+  port 443. It passes TLS through by hostname, only for visitors from the
+  countries you list, and drops everything else.
 - [`relay/acme-relay.conf.example`](relay/acme-relay.conf.example): port 80.
   It forwards only `/.well-known/acme-challenge/`, so npm can obtain
   certificates, and redirects everything else to HTTPS.
+
+**The country filter** cuts out almost all of the internet's scanning and
+password guessing before it reaches home. It is not a lock (a VPN in an
+allowed country gets through), so accounts still need strong passwords. Let's
+Encrypt checks from abroad, which is why port 80 has no country filter; it only
+ever forwards the challenge path.
+
+The country database is DB-IP's free one. Install
+[`relay/update-geoip.example`](relay/update-geoip.example) as
+`/usr/local/sbin/update-geoip` (`chmod 755`) and **run it once before** adding
+the stream config, since nginx will not start without the file. Then refresh it
+monthly with two systemd units:
+
+```ini
+# /etc/systemd/system/update-geoip.service
+[Unit]
+Description=Refresh the country database for the relay filter
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/update-geoip
+
+# /etc/systemd/system/update-geoip.timer
+[Unit]
+Description=Monthly country database refresh
+[Timer]
+OnCalendar=*-*-05 04:30
+Persistent=true
+RandomizedDelaySec=1h
+[Install]
+WantedBy=timers.target
+```
+
+`systemctl daemon-reload && systemctl enable --now update-geoip.timer`.
+
+Someone travelling abroad is refused too. Add their country to the map for the
+trip, then `nginx -t && systemctl reload nginx`.
 
 Check from a machine outside your network:
 
@@ -1381,6 +1418,13 @@ Check from a machine outside your network:
 openssl s_client -connect <VPS_IP>:443 -servername jellyfin.yourdomain.tld   # reaches npm
 openssl s_client -connect <VPS_IP>:443 -servername anything.example          # dropped
 curl -H "Host: sonarr.yourdomain.internal" http://<VPS_IP>/                  # no answer
+```
+
+And on the VPS itself, which the database places in no country:
+
+```bash
+curl -v --resolve jellyfin.yourdomain.tld:443:127.0.0.1 https://jellyfin.yourdomain.tld/   # dropped
+tail /var/log/nginx/relay.log     # each line shows the visitor's country code
 ```
 
 Before npm has a certificate for the name, the first command ends in
@@ -1429,6 +1473,119 @@ docker run --rm --network homelab_relay curlimages/curl -s -H "$K" -H "Host: jel
 To keep an administrator account off the relay entirely, turn off **Allow
 remote connections** for it and use an ordinary account for watching. The
 administrator still works at home and from every container.
+
+### Step 10.6 — Names, certificates and the npm hosts
+
+> ⚠️ **Set strong, unique passwords on every Jellyfin account first.** Every
+> certificate is published in public Certificate Transparency logs
+> (searchable on crt.sh), and bots watch those logs. A name gets its first
+> login attempts within hours of its certificate, long before you share the
+> link with anyone.
+
+1. **DNS at the registrar:** an `A` record for each public name, pointing at
+   the VPS IP. At STRATO a new subdomain points at STRATO's own web hosting
+   until you choose **IP address of your own server** and enter the VPS IP.
+   Wait until a public resolver agrees:
+   `nslookup jellyfin.yourdomain.tld 9.9.9.9`.
+2. **Pi-hole:** a local DNS record for each name, pointing at the Mac Mini's
+   LAN IP. Home devices then go straight to npm instead of out to the VPS and
+   back, and they count as local, which Steps 10.5 and 10.7 depend on for
+   administrators.
+3. **npm, one proxy host per name** (scheme `http`, **Websockets Support** and
+   **Block Common Exploits** on):
+
+   | Name | Forward hostname | Port |
+   |------|------------------|------|
+   | `jellyfin.yourdomain.tld` | `jellyfin` | `8096` |
+   | `seerr.yourdomain.tld` | **`seerr-guard`**, never `jellyseerr` | `5055` |
+
+   SSL tab: **Request a new Certificate** (HTTP challenge, leave **Use DNS
+   Challenge** off). npm asks Let's Encrypt, which checks through the VPS's port
+   80, so it only works once steps 1 and 10.4 are done.
+4. **Open each host again** and turn on **Force SSL** and **HTTP/2**, then save.
+   On npm 2.15 those switches were not stored when set in the same save that
+   requested the certificate, and plain `http://` kept working at home.
+5. Leave **HSTS** off until everything has settled. Browsers remember it for
+   up to two years, so a mistake made while it is on is hard to undo.
+
+npm renews the certificates on its own through the same port-80 path, so keep
+`acme-relay` on the VPS.
+
+Check from outside and from home:
+
+```bash
+echo | openssl s_client -connect <VPS_IP>:443 -servername jellyfin.yourdomain.tld 2>/dev/null \
+  | openssl x509 -noout -subject -issuer -enddate     # CN=jellyfin.yourdomain.tld, Let's Encrypt
+curl -sI http://jellyfin.yourdomain.tld/ | head -3     # 301 to https://
+```
+
+### Step 10.7 — Seerr on the relay: administrators stay home
+
+Seerr checks a Jellyfin sign-in by asking Jellyfin from inside Docker, which
+Jellyfin trusts as local (Step 10.5). So turning off **Allow remote
+connections** for an administrator does not keep that account out of a public
+Seerr, and a Seerr administrator can read every API key in its settings.
+
+seerr-guard closes that gap (it runs even without content filters, Phase 12).
+It recognises a visitor who came through the relay by the last
+`X-Forwarded-For` address npm adds, which lies in `RELAY_NETWORKS` (the compose
+`relay` network), and there it refuses any account with admin, settings or
+user-management rights:
+
+- a sign-in answers `403 This account can only be used at home.`, the Seerr
+  session it created is ended, and its cookie never reaches the visitor;
+- a session started at home, or the API key (which always acts as user #1),
+  is refused the same way.
+
+**Manage Requests** alone is not refused, so an everyday account with that
+permission can approve requests from anywhere.
+
+In Seerr (Settings → General):
+
+- **Application URL:** `https://seerr.yourdomain.tld`, so links in
+  notifications work away from home.
+- **Local (password) sign-in** (Settings → Users): off, when everyone signs in
+  with Jellyfin (`POST /api/v1/settings/main` with `{"localLogin": false}` does
+  the same). That leaves no Seerr-only passwords to guess; a Seerr sign-in then
+  always ends at Jellyfin and its lockout (Step 10.8). The canary is unaffected,
+  since it is checked through the API key, not a sign-in.
+- **Default permissions** (Settings → Users) apply to everyone who signs in
+  for the first time. Plain **Request** means requests wait for approval.
+
+Check from outside (the key travels inside TLS to npm at home):
+
+```bash
+curl -s -H "X-Api-Key: <seerr api key>" https://seerr.yourdomain.tld/api/v1/auth/me
+# {"message":"This account can only be used at home."}
+curl -s -o /dev/null -w "%{http_code}\n" -H "X-Api-Key: <seerr api key>" http://<mac-mini-ip>:5055/api/v1/auth/me   # 200 at home
+```
+
+### Step 10.8 — What family and friends need
+
+Nothing to install, and no VPN. For each person:
+
+1. A **Jellyfin account of their own** (Dashboard → Users → **+**) with a strong
+   password, limited to the libraries they should see. The relay's country
+   filter is not a lock; the password is.
+
+   Set **Failed login attempts before user is locked out** (the user's profile
+   page, or `LoginAttemptsBeforeLockout` in `POST /Users/<id>/Policy`) to e.g. `10` on **every** account, the administrator included. The
+   default `-1` means *no lockout at all*: tested, five wrong passwords in a
+   row changed nothing, while a limit of 3 disabled the account on the third.
+   A locked account is re-enabled by an administrator. If the only
+   administrator is the one locked, the API key still works:
+   `POST /Users/<id>/Policy` with the user's policy and `"IsDisabled": false`.
+2. Two links:
+   - `https://jellyfin.yourdomain.tld` to watch, in a browser or as the server
+     address in any Jellyfin app;
+   - `https://seerr.yourdomain.tld` to request. They sign in with the same
+     Jellyfin username and password, and the first sign-in creates their Seerr
+     account.
+3. A request waits for approval (Step 10.7), Radarr or Sonarr downloads it, and
+   it appears in Jellyfin.
+
+Test once on mobile data with Wi-Fi and Netbird off. That is the only way to
+see what a friend sees.
 
 ---
 

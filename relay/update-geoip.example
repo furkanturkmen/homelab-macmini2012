@@ -1,0 +1,20 @@
+#!/bin/sh
+# VPS: /usr/local/sbin/update-geoip (chmod 755), run monthly by update-geoip.timer
+# (TODO.md Step 10.4).
+#
+# Refreshes the DB-IP country database (free, CC BY 4.0) used by the relay
+# country filter. Tries this month, then last month. Only swaps the file in
+# after a lookup against it succeeds, so a bad download cannot break nginx.
+set -eu
+dest=/var/lib/geoip/dbip-country-lite.mmdb
+mkdir -p "$(dirname "$dest")"
+tmp=$(mktemp)
+for m in "$(date +%Y-%m)" "$(date -d "-1 month" +%Y-%m)"; do
+    if curl -fsSL "https://download.db-ip.com/free/dbip-country-lite-$m.mmdb.gz" | gunzip > "$tmp" 2>/dev/null \
+       && mmdblookup --file "$tmp" --ip 8.8.8.8 country iso_code | grep -q US; then
+        install -m 644 "$tmp" "$dest"; rm -f "$tmp"
+        nginx -t >/dev/null 2>&1 && systemctl reload nginx
+        echo "geoip database updated from $m"; exit 0
+    fi
+done
+rm -f "$tmp"; echo "geoip update failed, keeping the current database" >&2; exit 1
