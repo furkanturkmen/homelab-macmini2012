@@ -10,6 +10,16 @@ Address = 10.77.0.2/32
 # on 80 and 443). Nothing is routed onward into the LAN.
 PostUp = iptables -I FORWARD -i %i -j DROP
 PostDown = iptables -D FORWARD -i %i -j DROP
+# Optional, Step 10.9: the one exception. WireGuard for your own devices
+# (wg-home, on the host) arrives here as UDP 51821 and is passed to the host's
+# address on the relay network (the .1 of its subnet). It stays encrypted end
+# to end; neither this container nor the VPS holds a key for it.
+PostUp = iptables -I FORWARD -i %i -o eth0 -p udp -d 172.31.77.1 --dport 51821 -j ACCEPT
+PostUp = iptables -t nat -A PREROUTING -i %i -p udp --dport 51821 -j DNAT --to-destination 172.31.77.1:51821
+PostUp = iptables -t nat -A POSTROUTING -o eth0 -p udp -d 172.31.77.1 --dport 51821 -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -o eth0 -p udp -d 172.31.77.1 --dport 51821 -j ACCEPT
+PostDown = iptables -t nat -D PREROUTING -i %i -p udp --dport 51821 -j DNAT --to-destination 172.31.77.1:51821
+PostDown = iptables -t nat -D POSTROUTING -o eth0 -p udp -d 172.31.77.1 --dport 51821 -j MASQUERADE
 
 [Peer]
 PublicKey = <contents of /etc/wireguard/relay.pub on the VPS>
