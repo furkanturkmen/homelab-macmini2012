@@ -284,10 +284,13 @@ services:
 
   jellyfin:
     container_name: jellyfin
-    # Pinned to the 12.0 line. Unpinned, watchtower took this from 10.x to
+    # Pinned to major version 12. Unpinned, watchtower took this from 10.x to
     # 12.0.0 unattended on 2026-09-08 and broke every client that sent the
-    # legacy X-Emby auth headers. 12.0 still gets patches, never a major.
-    image: jellyfin/jellyfin:12.0
+    # legacy X-Emby auth headers. Jellyfin numbers its bugfix releases 12.1,
+    # 12.2, ... and the 12.0 tag never moves, so a 12.0 pin silently stopped
+    # all fixes (12.1 went unnoticed). The 12 tag follows them and never
+    # becomes 13 on its own.
+    image: jellyfin/jellyfin:12
     restart: unless-stopped
     ports:
       - "8096:8096"
