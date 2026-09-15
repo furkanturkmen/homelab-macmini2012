@@ -19,6 +19,7 @@ gluetun/*
 7dtd/
 homarr/
 wg-relay/
+wg-home/
 dnscrypt-proxy/cache/
 *.env
 .env
