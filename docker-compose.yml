@@ -91,6 +91,14 @@ services:
 
   wg-relay:
     container_name: wg-relay
+    labels:
+      # Not updated unattended. See the comment on watchtower: the two forwarders
+      # below live in this container's network namespace, and recreating it
+      # leaves them holding a namespace that no longer exists - the public names
+      # go dark until they are restarted after it. Update by hand:
+      #   docker compose pull wg-relay && docker compose up -d wg-relay
+      #   docker compose restart relay-forward relay-forward-http
+      com.centurylinklabs.watchtower.enable: "false"
     image: lscr.io/linuxserver/wireguard:latest
     restart: unless-stopped
     # OPTIONAL (profile "relay", docs/10-public-relay.md). Netbird remains the default
@@ -116,6 +124,9 @@ services:
 
   relay-forward:
     container_name: relay-forward
+    labels:
+      # Updated together with wg-relay, by hand.
+      com.centurylinklabs.watchtower.enable: "false"
     image: alpine/socat:latest
     restart: unless-stopped
     profiles: ["relay"]
@@ -128,6 +139,9 @@ services:
 
   relay-forward-http:
     container_name: relay-forward-http
+    labels:
+      # Updated together with wg-relay, by hand.
+      com.centurylinklabs.watchtower.enable: "false"
     image: alpine/socat:latest
     restart: unless-stopped
     profiles: ["relay"]
