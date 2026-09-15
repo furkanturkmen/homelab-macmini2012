@@ -189,9 +189,13 @@ published on the host.
 In Prowlarr: **Settings → Indexers → Indexer Proxies → Add → Http**, host
 `gluetun`, port `8888`, tag `vpn`. Then give every indexer the `vpn` tag.
 
-One exception: an indexer tagged for FlareSolverr (`cf`) goes through
-FlareSolverr instead, since Prowlarr applies a single proxy per indexer, and
-FlareSolverr has the normal connection. Today that is only 1337x.
+An indexer tagged for FlareSolverr (`cf`) cannot have both: Prowlarr applies a
+single proxy per indexer, and FlareSolverr uses the normal connection. The only
+one was 1337x, so it is disabled rather than left searching from the home
+address. Knaben covers most of what it found. Moving FlareSolverr into gluetun's
+namespace would fix it properly, but vpn-guard would then also have to restart
+FlareSolverr after gluetun, and Cloudflare challenges VPN addresses harder
+anyway. Until then, do not enable an indexer that needs FlareSolverr.
 
 The old `6881` port mappings went at the same time. qBittorrent listens on the
 forwarded port inside the tunnel, so 6881 on the host was an open port with
