@@ -327,7 +327,7 @@ In `docker-compose.yml`, add `devices:` and `group_add:` to the `jellyfin` servi
 ```yaml
   jellyfin:
     container_name: jellyfin
-    image: jellyfin/jellyfin:latest
+    image: jellyfin/jellyfin:12   # a major version, not :latest - see the comment in docker-compose.yml
     restart: unless-stopped
     ports:
       - "8096:8096"
