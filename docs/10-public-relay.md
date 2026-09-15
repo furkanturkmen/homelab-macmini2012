@@ -275,6 +275,16 @@ administrator still works at home and from every container.
 npm renews the certificates on its own through the same port-80 path, so keep
 `acme-relay` on the VPS.
 
+**Watch the public path.** In Uptime Kuma, one **Keyword** monitor per name, with
+the ntfy notification and **Certificate Expiry Notification** on:
+`https://jellyfin.yourdomain.tld/health` expecting `Healthy`, and
+`https://seerr.yourdomain.tld/api/v1/status` expecting `"version"`. Kuma looks
+names up through Docker's DNS, which follows the host's resolver rather than
+Pi-hole, so these really go out to the VPS and back through the tunnel - the
+path a friend uses. The monitors on LAN addresses would stay green through a
+broken tunnel. Check with `docker exec uptime-kuma getent hosts
+jellyfin.yourdomain.tld`: it should print the VPS address.
+
 Check from outside and from home:
 
 ```bash
