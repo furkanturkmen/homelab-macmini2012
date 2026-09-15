@@ -137,6 +137,43 @@ docker exec gluetun iptables -S OUTPUT | head -3
 `-P OUTPUT DROP` on the first line is the whole point. Without it there is no
 kill switch, whatever else looks healthy.
 
+## Step 7.6 — Keep it whole: the VPN guard
+
+A working tunnel does not stay working by itself. Once, gluetun failed a
+healthcheck on a DNS hiccup, started restarting the VPN and hung at "stopping"
+for twelve and a half hours. Nothing leaked (the kill switch held, and the old
+tunnel kept carrying traffic), but port forwarding had been torn down first, so
+no peer could connect in and every download crawled. Docker marked gluetun
+unhealthy and does nothing with that.
+
+[`scripts/vpn-guard.py`](../scripts/vpn-guard.py) checks every five minutes:
+gluetun healthy, traffic inside the tunnel leaving from an address other than
+your own, a forwarded port, qBittorrent listening on exactly that port. When
+something is wrong on two runs in a row it repairs, smallest fix first:
+
+- only the port is stale: it pushes the forwarded port into qBittorrent. This
+  happens when gluetun hands out a port while qBittorrent is restarting;
+- anything else: restart gluetun, wait until it is healthy with a port, **then**
+  restart qBittorrent, then push the port. qBittorrent lives in gluetun's
+  network namespace, so restarting gluetun alone leaves it without a network.
+
+It leaves a stopped qBittorrent alone (disk-guard stops it on purpose when the
+disk is nearly full), waits five minutes after gluetun starts (Watchtower or you
+mid-update), repairs at most every 20 minutes and 4 times a day, and sends an
+ntfy message for every repair. If tunnel traffic ever left from your own address
+it stops qBittorrent at once.
+
+```bash
+cp scripts/vpn-guard.py ~/homelab-scripts/ && chmod 755 ~/homelab-scripts/vpn-guard.py
+python3 ~/homelab-scripts/vpn-guard.py --dry-run    # reports, changes nothing
+crontab -e
+# */5 * * * * /usr/bin/python3 /home/furkan/homelab-scripts/vpn-guard.py >> /home/furkan/homelab-scripts/vpn-guard.log 2>&1
+```
+
+Paths in the script assume the user `furkan` and `~/homelab`; adjust them for
+yours. `--repair` runs the full restart once, whatever the state, to prove the
+sequence on your machine. It took about 20 seconds here.
+
 ---
 
 [← Phase 6: Push notifications when a download finishes](06-push-notifications.md) · [All phases](README.md) · [Phase 8: Stop the server transcoding: prefer H.264 at grab time →](08-prefer-h264.md)
