@@ -162,7 +162,13 @@ H.264 release first, HDTV and WEB alike, then SubsPlease (no codec named), then
 HEVC and AV1.
 
 **State on this server.** Applied to Sonarr's profile "HD" (the one in use),
-with the original saved first. Radarr's profiles still rank sources, but its
+with the original saved first. Sonarr and Radarr now each hold a single
+profile, renamed **"1080p – plays everywhere"**. The others (SD, HD 1080p, DVD,
+CAM and a hand-made "HD + untagged (no upgrades)") were used by nothing, or by
+one film each, and showed up as a confusing list in every request dialog. The
+two films were moved to the remaining profile first. After a rename, Seerr needs
+its default profile name updated and its Sonarr/Radarr caches flushed
+(Settings → Jobs & Cache), or it keeps offering the old list. Radarr's profiles still rank sources, but its
 minimum custom format score is `0` rather than the `−100` from Step 8.2, so
 HEVC and AV1 films are refused outright rather than ranked low. That is stricter
 than this phase intends, and it is left as is until a film goes missing for it.

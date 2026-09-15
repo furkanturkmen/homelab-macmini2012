@@ -112,6 +112,63 @@ curl -s -H "X-Api-Key: $SK" 'http://localhost:8989/api/v3/history?pageSize=40&so
 curl -s -X POST -H "X-Api-Key: $SK" http://localhost:8989/api/v3/history/failed/<id>
 ```
 
+## Step 9.5 — Clear what is going nowhere: decluttarr
+
+The guard catches a torrent that is *hostile*. A torrent that is merely *dead*
+is a different problem, and Sonarr and Radarr have no answer to it at all: they
+wait forever. Two of them sat in the queue for hours before anyone looked:
+
+- **Chainsaw Man:** a "Bluray x264 CUSTOM MULTi" season pack stuck at
+  *qBittorrent is downloading metadata* for 6¾ hours. The trackers claimed
+  10-14 seeders; not one ever connected.
+- **Attack on Titan:** a season pack at 86% and 0 B/s. Forty peers were
+  connected, and between them they held exactly 86% of it. No complete copy
+  existed in the swarm.
+
+[decluttarr](https://github.com/ManiMatter/decluttarr) checks the queues every
+10 minutes. When a download is caught several times in a row it removes it from
+qBittorrent, blocklists that release in Sonarr or Radarr, and has them search
+for another. It runs as the `decluttarr` service in `docker-compose.yml`, with
+[`decluttarr/config.yaml`](../decluttarr/config.yaml) mounted read-only. The API
+keys and the qBittorrent login come from `.env` through `!ENV`, so the config
+file holds no secrets.
+
+What is switched on, and why each is tuned the way it is:
+
+| Job | Acts after | Notes |
+|---|---|---|
+| `remove_metadata_missing` | 30 min | dead or fake magnets, the Chainsaw Man case |
+| `remove_stalled` | 30 min | no connections at all |
+| `remove_slow` | 1 hour below 50 KB/s | tolerant on purpose: old anime can be slow and healthy, and a blocklisted slow release may be the only one there is. Skipped while qBittorrent uses most of its global download limit |
+| `remove_failed_downloads` | at once | |
+| `remove_failed_imports` | at once | only messages that never resolve: dangerous file, invalid video, nothing importable, not an upgrade |
+| `remove_orphans` | at once | the series or film was deleted meanwhile |
+| `search_missing` | weekly per title, 2 at a time | titles that stay missing are searched again |
+
+Deliberately off: `search_unmet_cutoff` (it chases "better" releases, the
+opposite of Phase 8), `remove_bad_files` (it rewrites which files in a torrent
+download; the guard above already handles executables), `remove_unmonitored`
+(multi-season packs trip it).
+
+Tag a torrent `Keep` in qBittorrent and decluttarr never touches it.
+
+Start with `test_run: true` and read the log for a few rounds:
+
+```bash
+docker compose up -d decluttarr
+docker logs -f decluttarr        # also written to decluttarr/logs/logs.txt
+```
+
+Two things to know about test mode. It still starts the `search_missing`
+searches, so it is not entirely passive. And on start it warns that
+`detect_deletions` cannot see the media paths, although that job is not
+enabled; the warning is harmless.
+
+On this server test mode ran for two rounds, flagged nothing (nothing in the
+queue was stuck by then), and was then switched off. There is no ntfy
+notification from decluttarr; what it removed shows in Sonarr and Radarr under
+**Activity → Blocklist** and in its log.
+
 ---
 
 [← Phase 8: Stop the server transcoding: prefer H.264 at grab time](08-prefer-h264.md) · [All phases](README.md) · [Phase 10: Optional: public links for friends, through a relay VPS →](10-public-relay.md)
