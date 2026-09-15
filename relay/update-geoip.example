@@ -1,6 +1,6 @@
 #!/bin/sh
 # VPS: /usr/local/sbin/update-geoip (chmod 755), run monthly by update-geoip.timer
-# (TODO.md Step 10.4).
+# (docs/10-public-relay.md, Step 10.4).
 #
 # Refreshes the DB-IP country database (free, CC BY 4.0) used by the relay
 # country filter. Tries this month, then last month. Only swaps the file in

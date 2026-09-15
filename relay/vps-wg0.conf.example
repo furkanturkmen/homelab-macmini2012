@@ -1,4 +1,4 @@
-# VPS: /etc/wireguard/wg0.conf  (TODO.md Phase 10)
+# VPS: /etc/wireguard/wg0.conf  (docs/10-public-relay.md)
 # Generate the key once:  umask 077; wg genkey > /etc/wireguard/relay.key
 #                         wg pubkey < /etc/wireguard/relay.key > /etc/wireguard/relay.pub
 # The private key stays in its own file and is loaded by PostUp, so this config
