@@ -93,7 +93,7 @@ services:
     container_name: wg-relay
     image: lscr.io/linuxserver/wireguard:latest
     restart: unless-stopped
-    # OPTIONAL (profile "relay", TODO.md Phase 10). Netbird remains the default
+    # OPTIONAL (profile "relay", docs/10-public-relay.md). Netbird remains the default
     # way in; this only adds public links for people without a VPN app.
     # Outbound tunnel to a relay VPS. Friends connect to the VPS, which forwards
     # their still-encrypted HTTPS down this tunnel, so the ISP sees one WireGuard

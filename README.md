@@ -31,8 +31,8 @@ Total setup time from a fresh computer: **about 2-3 hours**.
 - **Intel Core i7-3615QM** — 2.3 GHz, 4 cores, 8 threads, 6 MB L3 cache (Ivy Bridge)
 - **Intel HD Graphics 4000** — integrated GPU. Does H.264 hardware transcoding via VA-API (Quick Sync). No HEVC, VP9 or AV1 support.
   This is a hard limit of the silicon, not a setting, and it decides what the library should hold: an HEVC or AV1 file has to be
-  decoded in software before it can be re-encoded for a client, which this CPU cannot sustain in realtime. See [TODO.md](TODO.md)
-  Phase 8 for how the *arr apps are told to prefer H.264, and what that looks like when they are not.
+  decoded in software before it can be re-encoded for a client, which this CPU cannot sustain in realtime. See
+  [Phase 8](docs/08-prefer-h264.md) for how the *arr apps are told to prefer H.264, and what that looks like when they are not.
 - **16 GB DDR3-1600 RAM** — maximum this model supports, cannot upgrade
 - **Crucial MX100 512 GB SATA SSD** — the boot disk. If your Mac Mini is still on its stock 5400 rpm HDD, swapping in an SSD is the single biggest speed difference you can make on this machine — do it before installing Ubuntu, not after.
 - **Gigabit Ethernet** — always used (Broadcom wifi and Bluetooth skipped, driver support on Linux is poor)
@@ -126,7 +126,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 
 ## How to set this up on your own machine
 
-**Full step-by-step walkthrough is in [TODO.md](TODO.md).** Read it top to bottom, do each checkbox.
+**The full step-by-step walkthrough is in [`docs/`](docs/README.md), one file per phase.** Work through them in order.
 
 Quick summary if you already know what you're doing:
 
@@ -152,57 +152,11 @@ The `.env` file is **gitignored** — your real passwords never leave your machi
 
 ---
 
-## After it's running
-
-Open a web browser on any device on your home network and visit:
-
-| Service | URL (replace `<ip>` with your Mac Mini IP) |
-|---------|---------|
-| Pi-hole admin | `http://<ip>:8080/admin` |
-| Portainer | `http://<ip>:9000` |
-| Uptime Kuma | `http://<ip>:3001` |
-| NPM admin | `http://<ip>:81` |
-| Nextcloud | `http://<ip>:8081` |
-| Jellyfin | `http://<ip>:8096` |
-| Radarr | `http://<ip>:7878` |
-| Sonarr | `http://<ip>:8989` |
-| Bazarr | `http://<ip>:6767` |
-| Prowlarr | `http://<ip>:9696` |
-| qBittorrent | `http://<ip>:8083` |
-| Jellyseerr | `http://<ip>:5055` |
-| ntfy | `http://<ip>:8095` |
-| jellylab-push (health) | `http://<ip>:8099/health` |
-
-Find the Mac Mini's IP by SSH'ing in and running `ip -4 addr show`. Look for the number that starts with `192.168.` or `10.`.
-
-Once NPM is set up you can also reach each service by hostname: `http://jellyfin.yourdomain.internal`, `http://nextcloud.yourdomain.internal`, etc.
-
----
-
-## Proxy config the NPM UI does not show
-
-Nginx Proxy Manager rewrites every file under `npm/data/nginx/proxy_host/` from
-its own database each time a host is saved, so hand edits there do not survive.
-The exception is `npm/data/nginx/custom/`, which NPM includes and never touches
-— and never displays either. **Nothing in that directory appears anywhere in the
-web UI.**
-
-Reviewable copies live in [`npm-custom/`](npm-custom/), along with install,
-verify and removal commands. What they do today: add CORS headers to the
-Jellyseerr host for the Expo dev server's origin, so the JellyLab app can be run
-in a desktop browser. Jellyseerr sends none of its own and rejects preflights,
-which a browser reads as the service being unreachable while a plain tab loads
-it fine.
-
-If a proxied host behaves in a way the UI cannot explain, look there first.
-
----
-
 ## Things to know before you start
 
 - **The Mac Mini becomes headless** — no monitor, no keyboard once set up. You control it from your laptop via SSH.
 - **Broadcom wifi and Bluetooth don't work well on Linux** for this model. Use Ethernet only.
-- **Hardware transcoding works, but H.264 only.** The HD 4000 does H.264 decode + encode in hardware via VA-API. Measured on this machine: **177 fps (7.4x realtime)** for a 1080p H.264 transcode, versus 62 fps (2.6x) on the CPU. HEVC/H.265, VP9 and AV1 have no hardware path and fall back to the CPU, which struggles above 1080p. HDR tone-mapping is not possible. Setup steps in [TODO.md](TODO.md).
+- **Hardware transcoding works, but H.264 only.** The HD 4000 does H.264 decode + encode in hardware via VA-API. Measured on this machine: **177 fps (7.4x realtime)** for a 1080p H.264 transcode, versus 62 fps (2.6x) on the CPU. HEVC/H.265, VP9 and AV1 have no hardware path and fall back to the CPU, which struggles above 1080p. HDR tone-mapping is not possible. Setup steps in [Step 4.7](docs/04-deploy-the-stack.md#step-47--enable-hardware-transcoding-va-api).
 - **16 GB RAM is the ceiling.** With everything idle it sits around 2 GB used — plenty of headroom for normal use.
 - **HTTPS on `*.yourdomain.internal` is not possible** — `.internal` is a reserved private TLD, so no public CA can issue a certificate for it. Either stay on plain HTTP inside the LAN, or move your internal hostnames onto a subdomain of a domain you actually own (`jellyfin.home.example.com`) and let NPM issue certs through the Cloudflare **DNS-01** challenge. DNS-01 validates over DNS records instead of an HTTP request, so it works for names that only resolve on your LAN, with nothing exposed to the internet.
 - **Some proxy behaviour is not in the NPM UI** — see [`npm-custom/`](npm-custom/). Files under `npm/data/nginx/custom/` are included by every proxy host and shown nowhere.
@@ -210,25 +164,25 @@ If a proxied host behaves in a way the UI cannot explain, look there first.
 
 ---
 
-## Roadmap
+## Setup guide
 
-Rough phases in [TODO.md](TODO.md):
+One file per phase in [`docs/`](docs/README.md):
 
-0. Optional: swap the stock 5400 rpm HDD for an SSD — do this before installing anything
-1. Install Ubuntu Server on Mac Mini
-2. Set up SSH access and install Docker
-3. Deploy the stack via docker-compose
-4. Run first-run wizards for each service (Portainer, NPM, Nextcloud, Jellyfin, *arr, Jellyseerr, Homarr), then enable VA-API hardware transcoding for Jellyfin
-5. Point your router's DNS at Pi-hole for LAN-wide ad blocking
-6. Install Netbird for remote access
-7. Push notifications on import via ntfy (Radarr/Sonarr/Seerr) — see [TODO.md](TODO.md) Phase 6
-8. Route qBittorrent through a VPN with a real kill switch — Phase 7
-9. Score H.264 above HEVC/AV1 in Sonarr and Radarr, so the server stops transcoding what it cannot hardware-decode — Phase 8
-10. Guard against torrents that are executables wearing a release name, and demote the indexer that served one — Phase 9
-11. Optional: public `https://` links for family and friends through a small relay VPS, with no VPN app for them and one encrypted flow for your ISP to see. Netbird keeps working alongside it — Phase 10
-12. Encrypt Pi-hole's upstream DNS, so the ISP cannot read the household's lookups — Phase 11
-13. Optional: per-user content filters in Seerr and Jellyfin, on stock Seerr that updates itself — Phase 12
-14. Later: Vaultwarden (password manager), offsite backups (Duplicati → Backblaze)
+0. [Check the drive first](docs/00-ssd.md) — optional: swap the stock 5400 rpm HDD for an SSD, before installing anything
+1. [Install Ubuntu Server](docs/01-install-ubuntu.md) on the Mac Mini
+2. [Set up SSH access](docs/02-ssh.md)
+3. [Install Docker](docs/03-docker.md)
+4. [Deploy the stack](docs/04-deploy-the-stack.md): first-run wizards for each service, Pi-hole as the network's DNS, VA-API hardware transcoding for Jellyfin
+5. [Netbird](docs/05-netbird.md) for remote access
+6. [Push notifications](docs/06-push-notifications.md) on import via ntfy (Radarr/Sonarr/Seerr), and Uptime Kuma alerts
+7. [Route qBittorrent through a VPN](docs/07-qbittorrent-vpn.md) with a real kill switch
+8. [Prefer H.264](docs/08-prefer-h264.md) over HEVC/AV1 in Sonarr and Radarr, so the server stops transcoding what it cannot hardware-decode
+9. [Torrent guard](docs/09-torrent-guard.md) against executables wearing a release name, and demote the indexer that served one
+10. [Public links through a relay VPS](docs/10-public-relay.md) — optional: `https://` for family and friends, with no VPN app for them and one encrypted flow for your ISP to see. Netbird keeps working alongside it
+11. [Encrypt Pi-hole's upstream DNS](docs/11-encrypted-dns.md), so the ISP cannot read the household's lookups
+12. [Per-user content filters](docs/12-content-filters.md) — optional: in Seerr and Jellyfin, on stock Seerr that updates itself
+
+Reference: [storage](docs/storage.md), [release rules](docs/release-rules.md), [subtitles](docs/subtitles.md), [getting help](docs/getting-help.md). Ideas for later: [TODO.md](TODO.md).
 
 ---
 
