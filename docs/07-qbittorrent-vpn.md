@@ -209,6 +209,54 @@ docker exec prowlarr curl -s https://www.cloudflare.com/cdn-cgi/trace | grep ^ip
 docker exec prowlarr curl -s -x http://gluetun:8888 https://www.cloudflare.com/cdn-cgi/trace | grep ^ip
 ```
 
+## Step 7.8 — Subtitle searches through the tunnel, and what still is not
+
+Bazarr sends every subtitle search to the providers with the **release name**
+in it (`Show.S01E04.720p.WEBRip.x264-GROUP`), from the home connection, and for
+OpenSubtitles tied to your account. Of everything left outside the tunnel, that
+said the most about what was downloaded.
+
+Bazarr has a proxy setting, and it applies it as `HTTP_PROXY`/`HTTPS_PROXY`
+with `NO_PROXY` from the exclusion list. **Settings → General → Proxy**: type
+HTTP, host `gluetun`, port `8888`, and exclude the services it talks to inside
+Docker, or those calls go out through the VPN and fail: `localhost`,
+`127.0.0.1`, `sonarr`, `radarr`, `whisper`, `jellyfin`. In the config file that
+is the `proxy:` block of `bazarr/config/config/config.yaml` (edit it only with
+Bazarr stopped).
+
+While you are there, turn off **Analytics** (`analytics: enabled: false`). It
+posts usage statistics to Google Analytics.
+
+An environment proxy is a request, not a kill switch: each library decides
+whether to honour it. Verify by sampling Bazarr's connections during a search:
+
+```bash
+docker exec bazarr cat /proc/net/tcp    # remote addresses in hex; gluetun:8888 is ...:22B8
+```
+
+Here, during a movie subtitle search, 182 samples went to `gluetun:8888`, and
+the internal ones to Sonarr, Radarr, Jellyfin and whisper. One went direct:
+Bazarr's news feed (`announcements.json` from cdn.jsdelivr.net), which says
+nothing about your media. OpenSubtitles kept working through the VPN.
+
+**Still direct from home, on purpose:** metadata lookups by Jellyfin (TMDB,
+TheTVDB, AniDB, AniList), Sonarr, Radarr and Seerr. They reveal which titles are
+in the library, not where they came from, and moving them buys little. Your ISP
+sees the names of those services, not what is downloaded.
+
+**Lesson from this server:** set the tunnel up *before* the first download.
+qBittorrent's log shows it announcing the home address for about a day and a
+half after it was installed and before gluetun existed. Every torrent in that
+window was shared from the home connection, and no later setting changes that.
+To check your own history:
+
+```bash
+grep -h "Detected external IP" ~/homelab/qbittorrent/config/qBittorrent/logs/qbittorrent.log* | sort
+```
+
+A single unfamiliar address in that list can be a peer reporting a wrong one;
+qBittorrent inside gluetun has no other way out.
+
 ---
 
 [← Phase 6: Push notifications when a download finishes](06-push-notifications.md) · [All phases](README.md) · [Phase 8: Stop the server transcoding: prefer H.264 at grab time →](08-prefer-h264.md)
