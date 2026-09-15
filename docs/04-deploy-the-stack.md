@@ -196,7 +196,7 @@ Set an admin password (Settings → General → Authentication = Forms, save, th
 Default login: `admin` / `adminadmin`. **Change it immediately** (Tools → Options → Web UI). Then set:
 
 - Downloads → Default Save Path: `/media/downloads` (create it in advance: `mkdir -p /mnt/media/downloads`)
-- Connection → Listening port: `6881` (already mapped in compose)
+- Connection → Listening port: leave it. gluetun sets it to the port ProtonVPN forwards ([Phase 7](07-qbittorrent-vpn.md))
 - BitTorrent → Enable DHT + PeX + LSD
 
 **9. Radarr — `http://homelab:7878` (movies)**

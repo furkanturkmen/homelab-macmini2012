@@ -174,6 +174,37 @@ Paths in the script assume the user `furkan` and `~/homelab`; adjust them for
 yours. `--repair` runs the full restart once, whatever the state, to prove the
 sequence on your machine. It took about 20 seconds here.
 
+## Step 7.7 — Indexer searches through the tunnel too
+
+The tunnel hides what qBittorrent shares, but Prowlarr still searched every
+indexer from the home connection: the torrent sites logged the home address and
+every query, and the ISP saw which sites were being visited. Sonarr and Radarr
+only ever talk to Prowlarr, so Prowlarr is the one place to fix it.
+
+gluetun has an HTTP proxy built in. `HTTPPROXY: "on"` starts it on port 8888
+inside the tunnel, and `HTTPPROXY_STEALTH: "on"` stops it adding proxy headers.
+It is reachable as `gluetun:8888` on the compose network and deliberately not
+published on the host.
+
+In Prowlarr: **Settings → Indexers → Indexer Proxies → Add → Http**, host
+`gluetun`, port `8888`, tag `vpn`. Then give every indexer the `vpn` tag.
+
+One exception: an indexer tagged for FlareSolverr (`cf`) goes through
+FlareSolverr instead, since Prowlarr applies a single proxy per indexer, and
+FlareSolverr has the normal connection. Today that is only 1337x.
+
+The old `6881` port mappings went at the same time. qBittorrent listens on the
+forwarded port inside the tunnel, so 6881 on the host was an open port with
+nothing behind it.
+
+Verify from inside Prowlarr's container. The two `ip=` lines must differ, and
+the second must match gluetun's public IP:
+
+```bash
+docker exec prowlarr curl -s https://www.cloudflare.com/cdn-cgi/trace | grep ^ip
+docker exec prowlarr curl -s -x http://gluetun:8888 https://www.cloudflare.com/cdn-cgi/trace | grep ^ip
+```
+
 ---
 
 [← Phase 6: Push notifications when a download finishes](06-push-notifications.md) · [All phases](README.md) · [Phase 8: Stop the server transcoding: prefer H.264 at grab time →](08-prefer-h264.md)

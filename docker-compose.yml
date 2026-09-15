@@ -394,8 +394,6 @@ services:
     # qBittorrent has no network of its own, so its ports are published here
     ports:
       - "8083:8083"
-      - "6881:6881/tcp"
-      - "6881:6881/udp"
     environment:
       TZ: "${TZ}"
       # "custom" rather than "protonvpn" on purpose. With the protonvpn
@@ -430,6 +428,12 @@ services:
       # Reply traffic to the WebUI. Without these the firewall drops responses
       # to anything off the container network - LAN and VPN clients included.
       FIREWALL_OUTBOUND_SUBNETS: "192.168.68.0/22,100.64.0.0/10,172.16.0.0/12"
+      # An HTTP proxy for Prowlarr, so indexer searches leave through the tunnel
+      # too and torrent sites never see the home address. Other containers reach
+      # it as gluetun:8888; it is deliberately not published on the host.
+      # Stealth stops it adding proxy headers that name the requesting container.
+      HTTPPROXY: "on"
+      HTTPPROXY_STEALTH: "on"
     volumes:
       - ./gluetun:/gluetun
 
