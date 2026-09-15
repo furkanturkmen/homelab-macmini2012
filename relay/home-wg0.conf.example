@@ -1,4 +1,4 @@
-# Home: ~/homelab/wg-relay/wg_confs/wg0.conf  (gitignored; TODO.md Phase 10)
+# Home: ~/homelab/wg-relay/wg_confs/wg0.conf  (gitignored; docs/10-public-relay.md)
 # Generate the key without installing anything on the host:
 #   umask 077; mkdir -p wg-relay/wg_confs
 #   docker run --rm --entrypoint wg lscr.io/linuxserver/wireguard genkey > wg-relay/home.key
