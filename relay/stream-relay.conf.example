@@ -1,20 +1,36 @@
 # VPS: /etc/nginx/stream-relay.conf, included from the top level of
 # /etc/nginx/nginx.conf with:  include /etc/nginx/stream-relay.conf;
-# Needs the stream module:     apt install nginx libnginx-mod-stream
+# Needs the stream module and the country lookup:
+#   apt install nginx libnginx-mod-stream libnginx-mod-stream-geoip2 mmdb-bin
 #
 # TLS is not terminated here. nginx reads only the requested hostname (SNI)
 # from the handshake and passes the still-encrypted connection down the tunnel
-# to npm at home. Names not listed are dropped, so a scan of the bare IP gets
-# nothing back.
+# to npm at home. A connection gets through only when BOTH match: an allowed
+# country (by source IP) and an allowed name. Everything else is closed
+# without an answer, so a scan of the bare IP gets nothing back.
 stream {
-    log_format relay "$remote_addr [$time_local] sni=$ssl_preread_server_name "
+    # Free DB-IP country database, refreshed monthly by update-geoip
+    # (relay/update-geoip.example).
+    geoip2 /var/lib/geoip/dbip-country-lite.mmdb {
+        $geo_country country iso_code;
+    }
+
+    # Countries whose visitors may connect. One line per ISO country code.
+    map $geo_country $geo_allowed {
+        NL       1;
+        default  0;
+    }
+
+    log_format relay "$remote_addr $geo_country [$time_local] sni=$ssl_preread_server_name "
                      "-> $upstream_addr $status out=$bytes_sent in=$bytes_received ${session_time}s";
     access_log /var/log/nginx/relay.log relay;
 
-    map $ssl_preread_server_name $relay_upstream {
-        jellyfin.yourdomain.tld  home;
-        seerr.yourdomain.tld     home;
-        default                  drop;
+    # "<country allowed>:<name>". Seerr's name reaches seerr-guard at home, not
+    # Seerr itself; that is decided by the npm proxy host, not here.
+    map "$geo_allowed:$ssl_preread_server_name" $relay_upstream {
+        "1:jellyfin.yourdomain.tld"  home;
+        "1:seerr.yourdomain.tld"     home;
+        default                      drop;
     }
 
     upstream home { server 10.77.0.2:443; }
