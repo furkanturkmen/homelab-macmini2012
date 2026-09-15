@@ -128,6 +128,45 @@ ship a decoder — they only change what the browser *reports* supporting. Since
 Jellyfin picks direct play vs transcode from exactly that report, they can turn
 a working transcode into a black screen.
 
+## Step 8.5 — One group per resolution, or quality outranks codec
+
+Scoring alone was not enough, and it took two bad grabs to see why. **Sonarr
+compares quality first and custom format score only between releases of equal
+quality.** In a profile that ranks HDTV-1080p < WEB-1080p < Bluray-1080p, a
+Blu-ray always beats a WEB release, whatever codec either carries:
+
+- Attack on Titan season 1 was on disk as HDTV-1080p x265. Sonarr "upgraded" it
+  to a Blu-ray AV1 pack (score −25) over H.264 WEB packs (+15), because Blu-ray
+  outranks HDTV. The AV1 pack then stalled at 86% with no complete copy in the
+  swarm.
+- Chainsaw Man got a "Bluray x264 CUSTOM MULTi" pack that never delivered its
+  metadata, over the SubsPlease batch with 63 seeders, because Blu-ray outranks
+  the HDTV label SubsPlease releases parse as.
+
+The fix is to make every source of one resolution equal, so the score decides:
+in the profile, merge HDTV-1080p, WEBRip-1080p, WEBDL-1080p and Bluray-1080p
+into **one group** (Settings → Profiles → the profile → drag them together, or
+`PUT /api/v3/qualityprofile/<id>` with a group item), do the same for 720p, and
+set the cutoff to the 1080p group. Within a group the order becomes H.264 (+15),
+then releases that name no codec (0), then HEVC (−20), then AV1 (−25).
+
+Two consequences, both intended:
+
+- a file of any 1080p source meets the cutoff, so nothing already on disk is
+  replaced just because a Blu-ray appears;
+- source no longer matters within a resolution. A Blu-ray and a broadcast rip of
+  the same codec rank the same, and Sonarr's other rules break the tie.
+
+Verified by searching one episode: Sonarr's result order for 1080p put every
+H.264 release first, HDTV and WEB alike, then SubsPlease (no codec named), then
+HEVC and AV1.
+
+**State on this server.** Applied to Sonarr's profile "HD" (the one in use),
+with the original saved first. Radarr's profiles still rank sources, but its
+minimum custom format score is `0` rather than the `−100` from Step 8.2, so
+HEVC and AV1 films are refused outright rather than ranked low. That is stricter
+than this phase intends, and it is left as is until a film goes missing for it.
+
 ---
 
 [← Phase 7: Route qBittorrent through a VPN](07-qbittorrent-vpn.md) · [All phases](README.md) · [Phase 9: Catch a torrent that is not what it claims to be →](09-torrent-guard.md)
