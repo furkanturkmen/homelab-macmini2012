@@ -66,6 +66,16 @@ profile. Three formats, matched against the release title:
 | H.264 (x264) | `\b(x\|h)\.?264\b\|\bavc\b` | +15 |
 | HEVC (x265) | `\b(x\|h)\.?265\b\|\bhevc\b` | −20 |
 | AV1 | `\bav1\b` | −25 |
+| H.264 10-bit (Hi10P) | both `\b(x\|h)\.?264\b\|\bavc\b` **and** `10.?bit\|\bhi10p?\b` (two required conditions) | −30 |
+
+The last one came later, after a Sonarr season search grabbed
+`[Almighty] … S2 [BD 1920x1080 x264 10bit FLAC]` over 8-bit Crunchyroll
+releases: its title says x264, so it collected the full +15. **10-bit H.264 is
+not the H.264 this phase is about.** Almost no hardware decodes it: not the HD
+4000, not Apple devices, not most TVs. So it transcodes in software, which is
+exactly what Phase 8 set out to avoid. At −30 it nets −15, below a release that
+names no codec at all. Check with the parse endpoint that a Hi10P title comes
+back with both formats and a total of −15.
 
 Score, do not ban. A "must not contain x265" rejection rule starves anime,
 where plenty of series are released in x265 only — you would get nothing at
