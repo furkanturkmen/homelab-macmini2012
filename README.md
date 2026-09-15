@@ -102,7 +102,7 @@ Each service listens on a "port" (like a channel number on the server). You reac
 | Network | Netbird (on host) | — | Mesh VPN for remote access |
 | Network | wg-relay + relay-forward (optional) | — | Tunnel to a relay VPS for public links, off unless `COMPOSE_PROFILES=relay` |
 | Network | dnscrypt-proxy | 5053 | Encrypted upstream DNS for Pi-hole |
-| Network | gluetun | 8083 / 6881 | VPN tunnel qBittorrent runs inside |
+| Network | gluetun | 8083 | VPN tunnel qBittorrent runs inside |
 | Network | ntfy | 8095 | Self-hosted push notifications |
 | Network | jellylab-push | 8099 | ntfy to iOS app push bridge |
 | Admin | Portainer | 9000 / 9443 | Docker web UI |
