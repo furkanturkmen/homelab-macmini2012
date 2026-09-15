@@ -10,7 +10,42 @@
   - `sensors` (after `sudo apt install lm-sensors && sudo sensors-detect --auto`) — per-core temperatures
   - `uptime` — 1min / 5min / 15min load history
   - Baseline for this stack at idle: ~25% RAM, load 0.3-0.6, CPU freq ~1200-1600 MHz, temp 55-62°C
-- **Does the Mac Mini need a monitor to stay on?** No. Ubuntu Server runs headless; no display attached is the intended state. It only powers off on unplug, `shutdown`, thermal cutoff, or kernel panic.
+- **Does the Mac Mini need a monitor to stay on?** No. Ubuntu Server runs headless; no display attached is the intended state. It only powers off on unplug, `shutdown`, thermal cutoff, or kernel panic. The `homelab login:` prompt on a connected screen is the normal state too; nothing waits for you to log in there.
+- **The Mac Mini answers ping but nothing else, and the whole house "has no
+  internet"?** It has probably crashed and not come back. Pi-hole is the only
+  DNS server the router hands out, so every device loses name lookups with it.
+  That happened on 2026-09-15:
+  - **What it looked like:** ping answered in under a millisecond, but SSH,
+    Jellyfin, Pi-hole and every other port refused connections. The public
+    relay names were down, because their tunnel runs on the same machine.
+  - **What the screen showed:** a kernel oops ("Corrupted page table",
+    "Oops: Bad pagetable") in qBittorrent's memory, then kdump saving a crash
+    dump to `/var/crash`, then kdump itself hanging for 35 minutes waiting for
+    the USB data disk instead of rebooting. A reserved bit set in a page table
+    entry usually points at a flipped bit in RAM (this machine has no ECC), less
+    often at a kernel bug. Test the memory with memtest86+ before blaming
+    software.
+  - **Getting the house online meanwhile:** set the router's DHCP DNS to a
+    public resolver (e.g. `9.9.9.9`) until the Mac Mini is back, then back to
+    Pi-hole.
+  - **Getting in:** only the console works. Connect a monitor and keyboard; a
+    power cycle (Ctrl+Alt+Delete, or holding the power button) brings it back
+    once the dump is saved.
+  - **Finding the cause afterwards:** the dmesg of the crash is kept by
+    systemd-pstore in `/var/lib/systemd/pstore/`, and by kdump (if installed)
+    in `/var/crash/<date>/dmesg.*`. Both are root-only.
+  - **So it restarts by itself next time:**
+    [`scripts/reboot-on-crash.sh`](../scripts/reboot-on-crash.sh), run once
+    with `sudo`. It sets `kernel.panic = 10` (reboot 10 seconds after a crash;
+    the default `0` hangs forever), `kernel.panic_on_oops` and
+    `kernel.softlockup_panic`, and removes kdump, whose capture step is what
+    hung (pstore still keeps the crash log, and the 512 MB kdump reserved comes
+    back). It also tests the hardware watchdog: on this Mac Mini the firmware
+    has it disabled ("unable to reset NO_REBOOT flag"), so there is no
+    watchdog to lean on.
+  - **The day before**, the same crash dump showed the kernel OOM-killing
+    Sonarr at 9.5 GB, at the exact minute gluetun started to hang. Every
+    service now has a `mem_limit` in `docker-compose.yml` for that reason.
 - **Adding a service of your own?** If its data directory lives inside
   `~/homelab`, add it to `.gitignore` **in the same commit**. The repo is
   public, and a missing entry once published Homarr's database.
