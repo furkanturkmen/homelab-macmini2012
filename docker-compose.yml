@@ -1,11 +1,21 @@
 services:
 
+  # Every service has a mem_limit. None had one until 2026-09-15, when Sonarr
+  # grew to 9.5 GB, the kernel OOM-killed it, and gluetun, starved of memory at
+  # the same moment, hung for twelve and a half hours. A ceiling makes a runaway
+  # the only thing that gets killed and restarted. The values are several times
+  # what each service used on a normal day, so only a leak reaches them; raise
+  # one if `docker stats` shows a service living near its limit.
+
   # =========================================================
   # NETWORK
   # =========================================================
 
   pihole:
     container_name: pihole
+    # Above shm_size (512m) plus FTL itself: /dev/shm is charged to this limit,
+    # and a limit at shm_size would OOM-kill DNS exactly when FTL is busiest.
+    mem_limit: 1g
     labels:
       # Not updated unattended. See the comment on watchtower.
       com.centurylinklabs.watchtower.enable: "false"
@@ -46,6 +56,7 @@ services:
 
   dnscrypt-proxy:
     container_name: dnscrypt-proxy
+    mem_limit: 128m
     labels:
       # Not updated unattended, like pihole: it now carries every DNS lookup in the
       # house, and a bad 4 AM update would take the whole network offline.
@@ -70,6 +81,7 @@ services:
 
   nginx-proxy-manager:
     container_name: npm
+    mem_limit: 512m
     labels:
       # Not updated unattended. See the comment on watchtower.
       com.centurylinklabs.watchtower.enable: "false"
@@ -91,6 +103,7 @@ services:
 
   wg-relay:
     container_name: wg-relay
+    mem_limit: 64m
     labels:
       # Not updated unattended. See the comment on watchtower: the two forwarders
       # below live in this container's network namespace, and recreating it
@@ -124,6 +137,7 @@ services:
 
   relay-forward:
     container_name: relay-forward
+    mem_limit: 64m
     labels:
       # Updated together with wg-relay, by hand.
       com.centurylinklabs.watchtower.enable: "false"
@@ -139,6 +153,7 @@ services:
 
   relay-forward-http:
     container_name: relay-forward-http
+    mem_limit: 64m
     labels:
       # Updated together with wg-relay, by hand.
       com.centurylinklabs.watchtower.enable: "false"
@@ -155,6 +170,7 @@ services:
 
   wg-home:
     container_name: wg-home
+    mem_limit: 64m
     image: lscr.io/linuxserver/wireguard:latest
     restart: unless-stopped
     # OPTIONAL (profile "relay", docs/10-public-relay.md Step 10.9). A WireGuard
@@ -182,6 +198,7 @@ services:
 
   portainer:
     container_name: portainer
+    mem_limit: 256m
     image: portainer/portainer-ce:latest
     restart: unless-stopped
     ports:
@@ -193,6 +210,7 @@ services:
 
   uptime-kuma:
     container_name: uptime-kuma
+    mem_limit: 512m
     image: louislam/uptime-kuma:latest
     restart: unless-stopped
     ports:
@@ -202,6 +220,7 @@ services:
 
   homarr:
     container_name: homarr
+    mem_limit: 1g
     image: ghcr.io/homarr-labs/homarr:latest
     restart: unless-stopped
     ports:
@@ -227,6 +246,7 @@ services:
   # ordinary applications still update themselves.
   watchtower:
     container_name: watchtower
+    mem_limit: 128m
     image: nickfedor/watchtower:latest
     restart: unless-stopped
     volumes:
@@ -241,6 +261,7 @@ services:
 
   nextcloud-db:
     container_name: nextcloud-db
+    mem_limit: 1g
     image: mariadb:11
     restart: unless-stopped
     command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
@@ -254,11 +275,13 @@ services:
 
   nextcloud-redis:
     container_name: nextcloud-redis
+    mem_limit: 256m
     image: redis:alpine
     restart: unless-stopped
 
   nextcloud:
     container_name: nextcloud
+    mem_limit: 1g
     image: nextcloud:latest
     restart: unless-stopped
     depends_on:
@@ -284,6 +307,7 @@ services:
 
   jellyfin:
     container_name: jellyfin
+    mem_limit: 3g
     # Pinned to major version 12. Unpinned, watchtower took this from 10.x to
     # 12.0.0 unattended on 2026-09-08 and broke every client that sent the
     # legacy X-Emby auth headers. Jellyfin numbers its bugfix releases 12.1,
@@ -308,6 +332,7 @@ services:
 
   radarr:
     container_name: radarr
+    mem_limit: 2g
     image: lscr.io/linuxserver/radarr:latest
     restart: unless-stopped
     environment:
@@ -322,6 +347,7 @@ services:
 
   sonarr:
     container_name: sonarr
+    mem_limit: 2g
     image: lscr.io/linuxserver/sonarr:latest
     restart: unless-stopped
     environment:
@@ -336,6 +362,7 @@ services:
 
   bazarr:
     container_name: bazarr
+    mem_limit: 1536m
     image: lscr.io/linuxserver/bazarr:latest
     restart: unless-stopped
     environment:
@@ -358,6 +385,7 @@ services:
   # No ports: only Bazarr talks to it, over the compose network.
   whisper:
     container_name: whisper
+    mem_limit: 5g
     image: onerahmet/openai-whisper-asr-webservice:latest
     restart: unless-stopped
     environment:
@@ -370,6 +398,7 @@ services:
 
   prowlarr:
     container_name: prowlarr
+    mem_limit: 1g
     image: linuxserver/prowlarr:latest
     restart: unless-stopped
     environment:
@@ -385,6 +414,7 @@ services:
   # it - Jellyfin, Nextcloud and the *arr apps keep the normal connection.
   gluetun:
     container_name: gluetun
+    mem_limit: 256m
     image: qmcgaw/gluetun:latest
     restart: unless-stopped
     cap_add:
@@ -439,6 +469,7 @@ services:
 
   qbittorrent:
     container_name: qbittorrent
+    mem_limit: 2g
     image: linuxserver/qbittorrent:latest
     restart: unless-stopped
     # Shares gluetun's network namespace: if the tunnel drops there is no other
@@ -458,6 +489,7 @@ services:
 
   decluttarr:
     container_name: decluttarr
+    mem_limit: 256m
     # Removes downloads that are going nowhere (stuck on metadata, stalled, far
     # too slow, unimportable), blocklists them and has Sonarr/Radarr search again.
     # Sonarr and Radarr wait on a dead torrent forever. Settings and the reasoning
@@ -483,6 +515,7 @@ services:
 
   flaresolverr:
     container_name: flaresolverr
+    mem_limit: 1g
     image: ghcr.io/flaresolverr/flaresolverr:latest
     restart: unless-stopped
     environment:
@@ -492,6 +525,7 @@ services:
 
   jellyseerr:
     container_name: jellyseerr
+    mem_limit: 1g
     # Stock Seerr, updated unattended like everything else. The per-user content
     # filter that used to need a fork of Seerr now lives in seerr-guard below,
     # which everyone reaches Seerr through. The v3 tag follows 3.x releases
@@ -512,6 +546,7 @@ services:
 
   seerr-guard:
     container_name: seerr-guard
+    mem_limit: 256m
     image: node:22-alpine
     restart: unless-stopped
     # Per-user content filtering in front of stock Seerr (seerr-guard/). For a
@@ -565,6 +600,7 @@ services:
 
   sevendtd:
     container_name: 7dtd
+    mem_limit: 4g
     image: vinanrra/7dtd-server:latest
     restart: unless-stopped
     ports:
@@ -588,6 +624,7 @@ services:
 
   ntfy:
     container_name: ntfy
+    mem_limit: 256m
     image: binwiederhier/ntfy:latest
     restart: unless-stopped
     command: serve
@@ -615,6 +652,7 @@ services:
 
   jellylab-push:
     container_name: jellylab-push
+    mem_limit: 512m
     image: node:22-alpine
     restart: unless-stopped
     working_dir: /app
