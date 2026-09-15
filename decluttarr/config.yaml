@@ -47,12 +47,17 @@ jobs:
       - "No files found are eligible for import*"
       - "Not an upgrade for existing*"
       - "Not a Custom Format upgrade for existing*"
-  # The series or film was deleted after the download started.
-  remove_orphans:
-  # Titles that stay missing get searched again, a couple at a time, weekly.
-  search_missing:
-
   # Deliberately off:
+  # remove_orphans        - switched off 2026-09-15. Right after a restart,
+  #                         while Sonarr's queue was briefly empty (and while the
+  #                         containers could not see the media disk), it took
+  #                         five live Better Call Saul downloads for orphans and
+  #                         removed them
+  # search_missing        - switched off 2026-09-15. It searches episode by
+  #                         episode, so Sonarr grabbed single-episode torrents
+  #                         of an old series, most of them dead, which filled the
+  #                         three download slots while season packs with seeders
+  #                         existed. Search a season from Sonarr instead
   # remove_bad_files      - rewrites which files inside a torrent download;
   #                         torrent-guard already handles executables
   # search_unmet_cutoff   - chases "better" releases, and the quality profile

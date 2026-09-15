@@ -142,13 +142,25 @@ What is switched on, and why each is tuned the way it is:
 | `remove_slow` | 1 hour below 50 KB/s | tolerant on purpose: old anime can be slow and healthy, and a blocklisted slow release may be the only one there is. Skipped while qBittorrent uses most of its global download limit |
 | `remove_failed_downloads` | at once | |
 | `remove_failed_imports` | at once | only messages that never resolve: dangerous file, invalid video, nothing importable, not an upgrade |
-| `remove_orphans` | at once | the series or film was deleted meanwhile |
-| `search_missing` | weekly per title, 2 at a time | titles that stay missing are searched again |
 
 Deliberately off: `search_unmet_cutoff` (it chases "better" releases, the
 opposite of Phase 8), `remove_bad_files` (it rewrites which files in a torrent
 download; the guard above already handles executables), `remove_unmonitored`
 (multi-season packs trip it).
+
+**Also off, after they did more harm than good on the first day:**
+
+- **`remove_orphans`.** An orphan is a download no Sonarr or Radarr title
+  claims. Right after a restart, Sonarr's queue is briefly empty, and on this
+  server the containers also could not see the media disk for a while (see
+  getting-help). In that window it took five live Better Call Saul downloads
+  for orphans and removed them. Nothing was blocklisted and the library was
+  untouched (Sonarr imports with hardlinks), but the progress was lost.
+- **`search_missing`.** It searches episode by episode. For an older series that
+  makes Sonarr grab single-episode torrents, which are mostly dead, while season
+  packs have seeders. The dead ones took all three download slots and queued
+  everything else behind them. For a series that is missing whole seasons, run
+  **Series → Search Season** in Sonarr instead: a season search picks a pack.
 
 Tag a torrent `Keep` in qBittorrent and decluttarr never touches it.
 
@@ -159,8 +171,8 @@ docker compose up -d decluttarr
 docker logs -f decluttarr        # also written to decluttarr/logs/logs.txt
 ```
 
-Two things to know about test mode. It still starts the `search_missing`
-searches, so it is not entirely passive. And on start it warns that
+Two things to know about test mode. With `search_missing` on, it still starts
+those searches, so it is not entirely passive. And on start it warns that
 `detect_deletions` cannot see the media paths, although that job is not
 enabled; the warning is harmless.
 
