@@ -606,6 +606,13 @@ services:
       # home arrives with its VPN address, so list such devices individually in
       # .env rather than opening the whole VPN range.
       ADMIN_NETWORKS: "${FILTER_PAGE_NETWORKS:-192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.1/32}"
+      # The public relay (docs/10-public-relay.md), as for seerr-guard. npm serves
+      # this service at https://<public jellyfin name>/jellylab-push. A visitor
+      # arriving that way may only look (free space, download progress, filter
+      # names) and must send a Jellyfin token; cancelling, stopping a search,
+      # release checks and the filter page stay home only.
+      INTERNAL_NETWORKS: "172.18.0.0/16,127.0.0.1/32"
+      RELAY_NETWORKS: "172.31.77.0/24"
       # Sonarr and Radarr refresh their queues from qBittorrent once a minute,
       # so anything derived from them is up to a minute stale - over a gigabyte
       # at 20MB/s. Reading the client directly gives live progress and speed,

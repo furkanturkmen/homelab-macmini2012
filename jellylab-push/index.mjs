@@ -70,6 +70,13 @@ const {
   // only: an administrator account that may only sign in at home must not be
   // reachable from the mesh VPN through this page.
   ADMIN_NETWORKS = '192.168.0.0/16,10.0.0.0/8,172.16.0.0/12,127.0.0.1/32',
+  // The optional public relay (docs/10-public-relay.md). A visitor who came in
+  // through it reaches this service via npm, which appends the hop it received
+  // the request from to X-Forwarded-For. That hop is believed only when npm
+  // itself - a peer inside INTERNAL_NETWORKS - is the one saying it, and it
+  // marks a relay visitor when it lies inside RELAY_NETWORKS. Empty = no relay.
+  INTERNAL_NETWORKS = '172.18.0.0/16,127.0.0.1/32',
+  RELAY_NETWORKS = '',
 } = process.env;
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
@@ -91,11 +98,54 @@ function parseCidrs(text) {
   }
   return { ranges, toNum };
 }
-const adminNets = parseCidrs(ADMIN_NETWORKS);
-const fromHomeNetwork = (req) => {
-  const n = adminNets.toNum(req.socket.remoteAddress ?? '');
-  return n !== null && adminNets.ranges.some(r => n >= r.first && n <= r.last);
+const inside = (nets, ip) => {
+  const n = nets.toNum(ip ?? '');
+  return n !== null && nets.ranges.some(r => n >= r.first && n <= r.last);
 };
+const adminNets = parseCidrs(ADMIN_NETWORKS);
+const internalNets = parseCidrs(INTERNAL_NETWORKS);
+const relayNets = parseCidrs(RELAY_NETWORKS);
+
+/**
+ * Whether a request arrived through the public relay.
+ *
+ * Only the last X-Forwarded-For entry counts, because that is the one npm
+ * appended; anything to its left is whatever the visitor chose to send. And it
+ * counts only when the peer is npm, on the Docker network - a device on the LAN
+ * talking to port 8099 directly cannot claim to be relayed, or not.
+ */
+const viaRelay = (req) => {
+  if (!relayNets.ranges.length) return false;
+  const xff = String(req.headers['x-forwarded-for'] ?? '').trim();
+  if (!xff || !inside(internalNets, req.socket.remoteAddress)) return false;
+  return inside(relayNets, xff.split(',').pop().trim());
+};
+
+// npm's own address is in the home ranges, so without the relay check every
+// relay visitor would look like they were at home.
+const fromHomeNetwork = (req) => inside(adminNets, req.socket.remoteAddress) && !viaRelay(req);
+
+/*
+ * Who is asking, for a relay visitor. A Jellyfin token, checked against
+ * Jellyfin and remembered for a minute: the app polls /downloads every few
+ * seconds, and each of those should not be a round trip to Jellyfin.
+ */
+const SIGNED_IN = new Map();
+async function signedIn(token) {
+  if (!token) throw Object.assign(new Error('sign in to Jellyfin first'), { status: 401 });
+  const hit = SIGNED_IN.get(token);
+  if (hit && hit.until > Date.now()) return hit.name;
+  const name = await filters.whoAmI(token);
+  if (SIGNED_IN.size > 500) SIGNED_IN.clear();
+  SIGNED_IN.set(token, { name, until: Date.now() + 60_000 });
+  return name;
+}
+
+/** What a relay visitor may do: look, never change anything. */
+const RELAY_READS = new Set(['/storage', '/downloads', '/filters', '/filters/for']);
+
+/** npm serves this service under the public Jellyfin name at this path. */
+const PUBLIC_PREFIX = '/jellylab-push';
 
 const send = (res, code, obj) => {
   res.writeHead(code, { 'content-type': 'application/json' });
@@ -989,9 +1039,31 @@ const FILTER_PAGE_ROUTES = new Set(['/filters/admin', '/filters/login', '/filter
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
+  if (url.pathname === PUBLIC_PREFIX || url.pathname.startsWith(`${PUBLIC_PREFIX}/`)) {
+    url.pathname = url.pathname.slice(PUBLIC_PREFIX.length) || '/';
+  }
 
   if (url.pathname === '/health') {
     return send(res, 200, { ok: true });
+  }
+
+  /*
+   * Through the public relay this service only shows: free space, download
+   * progress and filter names, to someone signed in to Jellyfin. Everything
+   * that changes something - cancelling a download, stopping a search, running
+   * one across every indexer, the filter page - stays on the home network,
+   * where the rest of this file's "reachable only from the LAN" reasoning
+   * still holds.
+   */
+  if (viaRelay(req)) {
+    if (req.method !== 'GET' || !RELAY_READS.has(url.pathname)) {
+      return send(res, 403, { error: 'only available at home' });
+    }
+    try {
+      await signedIn(req.headers['x-emby-token']);
+    } catch (err) {
+      return send(res, err.status === 403 ? 401 : (err.status ?? 401), { error: err.message });
+    }
   }
 
   /**
