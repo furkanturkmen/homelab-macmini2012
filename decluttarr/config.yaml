@@ -11,8 +11,9 @@
 general:
   log_level: INFO
   # Start with true and read `docker logs decluttarr` for a few cycles: it says
-  # what it would remove. Set to false once that list looks right.
-  test_run: true
+  # what it would remove. Set to false once that list looks right. Note that
+  # search_missing still starts searches in test mode.
+  test_run: false
   timer: 10
   public_tracker_handling: remove
   private_tracker_handling: skip
