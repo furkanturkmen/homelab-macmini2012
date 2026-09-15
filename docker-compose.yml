@@ -139,6 +139,29 @@ services:
       - wg-relay
     command: "TCP-LISTEN:80,fork,reuseaddr TCP:npm:80"
 
+  wg-home:
+    container_name: wg-home
+    image: lscr.io/linuxserver/wireguard:latest
+    restart: unless-stopped
+    # OPTIONAL (profile "relay", docs/10-public-relay.md Step 10.9). A WireGuard
+    # server for your own devices, reached through the relay: the phone connects
+    # to the VPS, which passes the still-encrypted UDP down the wg-relay tunnel to
+    # here. The VPS holds no key for this tunnel, so a compromised VPS cannot
+    # reach the LAN. Keys and peers live in ./wg-home (gitignored).
+    profiles: ["relay"]
+    # On the host network, so devices arrive with their own tunnel address
+    # (10.78.0.x) and can reach the LAN, the way Netbird's route does. Jellyfin
+    # is told that range is local.
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      TZ: "${TZ}"
+    volumes:
+      - ./wg-home:/config
+
   # =========================================================
   # ADMIN
   # =========================================================
