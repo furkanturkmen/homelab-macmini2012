@@ -452,6 +452,31 @@ services:
       - ./qbittorrent/config:/config
       - /mnt/storage/media:/media
 
+  decluttarr:
+    container_name: decluttarr
+    # Removes downloads that are going nowhere (stuck on metadata, stalled, far
+    # too slow, unimportable), blocklists them and has Sonarr/Radarr search again.
+    # Sonarr and Radarr wait on a dead torrent forever. Settings and the reasoning
+    # per job are in decluttarr/config.yaml; docs/09-torrent-guard.md Step 9.5.
+    image: ghcr.io/manimatter/decluttarr:latest
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ}"
+      PUID: "${PUID}"
+      PGID: "${PGID}"
+      # Read by config.yaml through !ENV.
+      SONARR_API_KEY: "${SONARR_API_KEY}"
+      RADARR_API_KEY: "${RADARR_API_KEY}"
+      QBIT_USER: "${QBIT_USER}"
+      QBIT_PASSWORD: "${QBIT_PASSWORD}"
+    volumes:
+      - ./decluttarr/config.yaml:/app/config/config.yaml:ro
+      - ./decluttarr/logs:/app/logs
+    depends_on:
+      - sonarr
+      - radarr
+      - qbittorrent
+
   flaresolverr:
     container_name: flaresolverr
     image: ghcr.io/flaresolverr/flaresolverr:latest

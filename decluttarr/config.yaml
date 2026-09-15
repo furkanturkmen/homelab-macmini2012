@@ -1,0 +1,76 @@
+# decluttarr: removes downloads that are going nowhere, blocklists them in
+# Sonarr/Radarr and has them search for something else. docs/09-torrent-guard.md
+# Step 9.5. Keys come from .env through the compose environment (!ENV), so this
+# file holds no secrets.
+#
+# Written after two season packs sat in the queue for hours with nobody noticing:
+# Chainsaw Man stuck at "downloading metadata" for 6.75 hours with 0 of a claimed
+# 14 seeders connected, and Attack on Titan at 86% with no complete copy left in
+# the swarm. Sonarr waits on both forever.
+
+general:
+  log_level: INFO
+  # Start with true and read `docker logs decluttarr` for a few cycles: it says
+  # what it would remove. Set to false once that list looks right.
+  test_run: true
+  timer: 10
+  public_tracker_handling: remove
+  private_tracker_handling: skip
+  # Tag a torrent "Keep" in qBittorrent and it is never touched.
+  protected_tag: Keep
+
+job_defaults:
+  # A download has to be caught this many checks in a row (10 minutes apart).
+  max_strikes: 3
+  min_days_between_searches: 7
+  max_concurrent_searches: 2
+
+jobs:
+  # Stuck fetching metadata: dead or fake magnets. 30 minutes, then blocklisted.
+  remove_metadata_missing:
+  # Stalled with no connections at all. 30 minutes, then blocklisted.
+  remove_stalled:
+  # Below 50 KB/s on average for an hour. Tolerant on purpose: old anime can be
+  # slow and healthy, and a blocklisted slow release may be the only one there
+  # is. Skipped automatically while qBittorrent uses most of its global limit.
+  remove_slow:
+    min_speed: 50
+    max_strikes: 6
+  remove_failed_downloads:
+  # Only the failures that never fix themselves. Not "One or more episodes ...
+  # missing", which would throw away the episodes of a pack that did arrive.
+  remove_failed_imports:
+    message_patterns:
+      - "*Found potentially dangerous file with extension*"
+      - "Invalid video file*"
+      - "No files found are eligible for import*"
+      - "Not an upgrade for existing*"
+      - "Not a Custom Format upgrade for existing*"
+  # The series or film was deleted after the download started.
+  remove_orphans:
+  # Titles that stay missing get searched again, a couple at a time, weekly.
+  search_missing:
+
+  # Deliberately off:
+  # remove_bad_files      - rewrites which files inside a torrent download;
+  #                         torrent-guard already handles executables
+  # search_unmet_cutoff   - chases "better" releases, and the quality profile
+  #                         still ranks an AV1/HEVC Blu-ray above H.264 WEB
+  # remove_unmonitored    - multi-season packs trip it
+  # remove_missing_files, remove_done_seeding, detect_deletions - not needed
+
+instances:
+  sonarr:
+    - base_url: "http://sonarr:8989"
+      api_key: !ENV SONARR_API_KEY
+  radarr:
+    - base_url: "http://radarr:7878"
+      api_key: !ENV RADARR_API_KEY
+
+download_clients:
+  qbittorrent:
+    # qBittorrent has no network of its own; its Web UI is published by gluetun.
+    - base_url: "http://gluetun:8083"
+      username: !ENV QBIT_USER
+      password: !ENV QBIT_PASSWORD
+      name: "qBittorrent"
