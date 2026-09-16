@@ -181,6 +181,7 @@ One file per phase in [`docs/`](docs/README.md):
 10. [Public links through a relay VPS](docs/10-public-relay.md) — optional: `https://` for family and friends, with no VPN app for them and one encrypted flow for your ISP to see. Netbird keeps working alongside it
 11. [Encrypt Pi-hole's upstream DNS](docs/11-encrypted-dns.md), so the ISP cannot read the household's lookups
 12. [Per-user content filters](docs/12-content-filters.md) — optional: in Seerr and Jellyfin, on stock Seerr that updates itself
+13. [Offsite backups](docs/13-backups.md) to Backblaze B2 — encrypted before they leave the house, sent through the VPN, alerting when a backup *stops* happening
 
 Reference: [storage](docs/storage.md), [release rules](docs/release-rules.md), [subtitles](docs/subtitles.md), [getting help](docs/getting-help.md). Ideas for later: [TODO.md](TODO.md).
 
