@@ -26,6 +26,15 @@ Not new services — settings in the ones already here.
   remote bitrate cap and a session limit per account bound that before it
   becomes a support call. Nobody has hit it yet, which is why it is here and not
   in the guide.
+- **Seerr request quotas.** Every account is unlimited, so one enthusiastic
+  evening can queue hundreds of titles and fill the disk. Set per-user in Seerr
+  (Users → edit → quotas), e.g. 10 movies and 5 series a week for the children,
+  unlimited for you. While in there, consider turning off
+  `enableSpecialEpisodes`: specials are badly named at every indexer, so they
+  are the requests most likely to sit "searching" forever.
+- **Uptime Kuma history retention.** 180 days by default — already 468,000
+  heartbeats and 70 MB after one month, and the file is in the nightly backup.
+  60 days is plenty for a household. Settings → Monitor History.
 
 Done and moved into the guide:
 
