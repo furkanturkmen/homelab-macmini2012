@@ -4,6 +4,13 @@ Netbird is a free WireGuard-based mesh VPN. Lets you reach the Mac Mini from you
 
 > **Why Netbird instead of Tailscale?** Both work. Tailscale was tried first here and dropped because of an iOS 26 bug where split-DNS wasn't applied on cellular. Netbird's split-DNS worked immediately on all platforms. Both are excellent — pick either, this guide covers Netbird.
 
+> **This is one of two ways in, and the one to start with.** It is free and
+> covers everything as long as each person will install the app. When that
+> stops being true — a relative who never will, or a TV with no VPN client —
+> [Phase 10](10-public-relay.md) adds plain `https://` links through a relay
+> VPS, for viewing only. The two run side by side; nothing later in this guide
+> assumes you did Phase 10.
+
 ## Step 5.1 — Install Netbird on the Mac Mini
 
 ```

@@ -23,7 +23,10 @@ LOG="${BACKUP_LOG:-$HOME/homelab-scripts/backup.log}"
 NEXTCLOUD_DATA="${NEXTCLOUD_DATA:-/mnt/storage/documents}"
 RESTIC_IMAGE="${RESTIC_IMAGE:-restic/restic:latest}"
 HELPER_IMAGE="${HELPER_IMAGE:-python:3-alpine}"
-PROXY="${BACKUP_PROXY:-http://gluetun:8888}"
+# No colon: an explicitly empty BACKUP_PROXY means "no proxy", while unset
+# still defaults to the VPN. With ${VAR:-default} an empty value would be
+# treated as unset and silently keep proxying.
+PROXY="${BACKUP_PROXY-http://gluetun:8888}"
 NETWORK="${BACKUP_NETWORK:-homelab_default}"
 REPO_PATH="${BACKUP_REPO_PATH:-homelab}"
 NTFY_URL="${NTFY_LOCAL_URL:-http://127.0.0.1:8095}"
