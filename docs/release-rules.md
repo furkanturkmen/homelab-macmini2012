@@ -164,6 +164,71 @@ to a phone over the mesh.
 `Bluray-1080p` stays: it labels the *source*, not the size, and the best
 encodes come from it — Pinocchio: Unstrung arrived as a 1.52GiB BluRay rip.
 
+## R12 — Burned-in subtitles are permanent
+
+Every rule above judges a release by its video. A release can satisfy all of
+them and still be unwatchable: `Attack on Titan S01 VOSTFR 1080p WEB H.264 AAC
+-Tsundere-Raws` is H.264 8-bit, 1080p, the right length and the right size. It
+also has **French subtitles painted into the picture**, and a broadcast promo
+ticker with them. Bazarr then adds Dutch on top, and the screen has two
+subtitles in two languages, forever.
+
+Nothing in the file says so. `ffprobe` reports one video stream, one audio
+stream and **no subtitle stream at all** — which reads like "no subs" and
+actually means "the subs cannot be turned off". The only way to see it is to
+look:
+
+```bash
+docker exec jellyfin /usr/lib/jellyfin-ffmpeg/ffmpeg -v error -ss 00:08:15 \
+  -i "/media/<path>.mkv" -frames:v 1 -vf scale=960:-1 -y /tmp/frame.jpg
+```
+
+A subbed anime release with **no subtitle stream** is hardsubbed until a frame
+proves otherwise. `VOSTFR` is the French marker and the common case.
+
+The custom format scores **−10000**, which is below any profile's
+`minFormatScore`, so it is refused rather than merely disliked (R1). It matches
+two things:
+
+| condition | matches | why |
+|---|---|---|
+| title `\bVOSTFR\b\|\bVOSTA\b\|\bHARDSUB` | releases being considered | keeps it out |
+| release group `Tsundere-Raws` | **the file already imported** | lets it be replaced |
+
+The second is the one that matters after the fact. A file on disk keeps no
+release title — `sceneName` was null here — so only the group identifies it,
+and until the file scores badly there is nothing to upgrade *to*: both apps
+refuse a swap that is not an upgrade, and the replacement is the same quality
+tier. Scoring the group dropped the file from +15 to −9985, and a clean release
+became a 10000-point improvement.
+
+The replacement was `[Erai-raws] Shingeki no Kyojin - 01 ~ 25 [1080p][BATCH]
+[Multiple Subtitle]`: same source, subtitles as **selectable tracks**.
+
+**Two traps in grabbing it.** The batch is listed by two indexers with the same
+infohash, and neither listing works alone — one carries the magnet, the other
+spells the title in a way the parser can read. `Shingeki no Kyojin S01  - 01 ~
+25` (with `S01`) parses as *Unknown Series*; the same torrent as `Shingeki no
+Kyojin - 01 ~ 25` resolves to the series and all 25 absolute episode numbers.
+Check a title before pushing it:
+
+```bash
+curl -s -H "X-Api-Key: <key>" --get --data-urlencode "title=<release title>" \
+  http://<host>:8989/api/v3/parse | python3 -m json.tool | head -30
+```
+
+Then hand it over with the title that parses and the URL that resolves:
+
+```bash
+curl -s -X POST -H "X-Api-Key: <key>" -H 'Content-Type: application/json' \
+  -d '{"title":"<the spelling that parses>","downloadUrl":"<magnet>","magnetUrl":"<magnet>","protocol":"Torrent","indexer":"Nyaa.si"}' \
+  http://<host>:8989/api/v3/release/push
+```
+
+A pushed release is grabbed like any other, and the queue takes about a minute
+to show it — it was briefly empty here while the client already had the torrent.
+Check the client before concluding anything was lost.
+
 ## Traps, all found the hard way
 
 - **Deleting a profile orphans Jellyseerr.** It stores its default as a bare
