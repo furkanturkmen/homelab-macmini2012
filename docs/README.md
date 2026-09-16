@@ -4,6 +4,33 @@ This guide takes you from "I have an old computer" to "I have a working homelab"
 
 Work through the phases in order. Phases 0–4 give you the working stack; everything after that adds one thing each and can be done when you want it.
 
+## Two ways to reach it from outside
+
+Phases 5 and 10 are not a sequence — they are **two answers to the same
+question**, and most people only need the first.
+
+| | [Phase 5 — mesh VPN](05-netbird.md) | [Phase 10 — relay VPS](10-public-relay.md) |
+|---|---|---|
+| Costs | nothing | a small VPS, ~€5/month, and a domain |
+| Viewers must | install an app and be invited | open a link, nothing installed |
+| Good for | you, your own devices, anyone you can ask to install something | family and friends who will not install a VPN |
+| Admin pages (*arr, Portainer, Pi-hole) | reachable | deliberately **not** — those never go on the internet |
+| Your ISP sees | an encrypted mesh | one encrypted flow to the VPS |
+
+**Start with Phase 5.** It is free, takes ten minutes and covers every case
+where the people involved will install an app. Add Phase 10 only when you hit
+the wall it exists for: a parent or a friend who will never set up a VPN, or a
+TV whose app store has no VPN client.
+
+They run side by side — adding Phase 10 does not replace Netbird, and the
+guide never assumes you did it. Anything that depends on the relay says so at
+the top ([Step 6.7](06-push-notifications.md#step-67--optional-reach-ntfy-without-the-vpn)
+is the only one outside Phase 10 itself). Phases 11, 12 and 13 work either way.
+
+If you would rather not depend on a hosted mesh at all, [Step 10.9](10-public-relay.md)
+is the same idea built entirely from your own machines: a WireGuard server at
+home, with the VPS forwarding packets it cannot read.
+
 **What you need before starting:**
 
 - The Mac Mini 2012 (or any old computer with 8GB+ RAM)
