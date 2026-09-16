@@ -29,6 +29,9 @@ HELPER_IMAGE="${HELPER_IMAGE:-python:3-alpine}"
 PROXY="${BACKUP_PROXY-http://gluetun:8888}"
 NETWORK="${BACKUP_NETWORK:-homelab_default}"
 REPO_PATH="${BACKUP_REPO_PATH:-homelab}"
+RELAY_CONTAINER="${RELAY_CONTAINER:-wg-relay}"   # holds the tunnel namespace
+RELAY_PEER="${RELAY_PEER:-10.77.0.1}"            # the VPS end, inside the tunnel
+HELPER_IMAGE_ALPINE="${HELPER_IMAGE_ALPINE:-alpine}"
 NTFY_URL="${NTFY_LOCAL_URL:-http://127.0.0.1:8095}"
 KUMA_URL="${KUMA_LOCAL_URL:-http://127.0.0.1:3001}"
 
@@ -69,7 +72,9 @@ failed() {
 trap 'failed $LINENO' ERR
 
 rm -rf "$STAGING"
-mkdir -p "$STAGING/db"
+# Both exist even when empty: they are named in the include list, and restic
+# fails the whole run on a path that is not there.
+mkdir -p "$STAGING/db" "$STAGING/vps"
 chmod 700 "$STAGING"
 
 echo "--- dumping MariaDB (Nextcloud) ---"
@@ -90,6 +95,7 @@ docker run --rm \
 # either way.
 cat > "$STAGING/include.txt" <<'EOF'
 /staging/db
+/staging/vps
 /data/.env
 /data/docker-compose.yml
 /data/wg-relay
@@ -134,6 +140,35 @@ cat > "$STAGING/exclude.txt" <<'EOF'
 /data/npm/data/logs
 /documents/appdata_*/preview
 EOF
+
+# The relay VPS's own configuration - the SNI allowlist, its WireGuard keys,
+# the country-filter units - exists nowhere else. Without this, losing that
+# machine means rebuilding it from memory.
+#
+# Fetched over the existing tunnel rather than the VPS's public address, so no
+# new connection appears for the ISP to see; the traffic is already flowing.
+# The key it uses is locked to a single command on the VPS side, so a
+# compromised homelab cannot take the relay with it.
+if docker ps --format '{{.Names}}' | grep -qx "$RELAY_CONTAINER"; then
+  echo "--- fetching the relay VPS config (through the tunnel) ---"
+  mkdir -p "$STAGING/vps"
+  if docker run --rm --network "container:$RELAY_CONTAINER" \
+       -v "$HOME/.ssh":/ssh:ro "$HELPER_IMAGE_ALPINE" \
+       sh -c "apk add -q --no-cache openssh-client && \
+              ssh -i /ssh/id_ed25519 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+                  -o ConnectTimeout=15 root@$RELAY_PEER" \
+       > "$STAGING/vps/relay-config.tar.gz" 2>/dev/null \
+     && [ -s "$STAGING/vps/relay-config.tar.gz" ]; then
+    echo "  $(du -h "$STAGING/vps/relay-config.tar.gz" | cut -f1) received"
+  else
+    # Not fatal: the rest of the backup matters more than the relay config,
+    # and a relay that is down is already being alerted on separately.
+    echo "  WARNING: could not reach the relay VPS, continuing without it"
+    rm -f "$STAGING/vps/relay-config.tar.gz"
+    notify "Backup: relay config missing" \
+      "Could not fetch the VPS config through the tunnel; the rest was backed up." 3
+  fi
+fi
 
 if [ -f "$STAGING/db/INTEGRITY-WARNINGS.txt" ]; then
   echo "--- WARNING: damaged databases (backed up anyway) ---"
