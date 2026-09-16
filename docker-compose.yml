@@ -354,6 +354,13 @@ services:
       PUID: "${PUID}"
       PGID: "${PGID}"
       TZ: "${TZ}"
+      # .NET's server GC keeps one heap per CPU core and returns memory to the
+      # OS reluctantly. On 8 threads Sonarr grew from 170 MB to 1.15 GB of live
+      # heap in seven hours and then started failing its qBittorrent calls with
+      # OutOfMemoryException - and was OOM-killed at 9.5 GB before mem_limit
+      # existed. Workstation GC collects more eagerly and gives it back.
+      # Radarr is deliberately left on the default as a control.
+      DOTNET_gcServer: "0"
     volumes:
       - ./sonarr/config:/config
       - /mnt/storage/media:/media
