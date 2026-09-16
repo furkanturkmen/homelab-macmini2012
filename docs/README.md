@@ -32,6 +32,7 @@ Work through the phases in order. Phases 0–4 give you the working stack; every
 | 10 | [Public links through a relay VPS](10-public-relay.md) | *Optional.* `https://` links for family and friends with nothing to install, hidden from your ISP |
 | 11 | [Encrypted DNS](11-encrypted-dns.md) | Pi-hole's lookups encrypted, so your ISP cannot read them |
 | 12 | [Per-user content filters](12-content-filters.md) | *Optional.* Titles hidden per person in Seerr and Jellyfin |
+| 13 | [Offsite backups](13-backups.md) | Everything irreplaceable copied nightly to Backblaze B2, encrypted, through the VPN |
 
 ## Reference
 
