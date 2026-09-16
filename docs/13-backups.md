@@ -166,7 +166,49 @@ docker start jellyfin
 `REINDEX` rebuilds an index from the table data. If the table itself held
 duplicates it would refuse — which is the signal to stop and look, not to force.
 
-## Step 13.4 — Alert on a backup that stops happening
+## Step 13.4 — The relay VPS backs itself up too
+
+Only if you did [Phase 10](10-public-relay.md). That machine holds the one copy
+of its own setup: the SNI allowlist, its WireGuard keys, the country-filter
+units, the firewall rules. The examples in `relay/` rebuild the *shape*, not
+your install.
+
+The backup fetches it over the **existing tunnel**, not the VPS's public
+address — a nightly SSH connection to a new destination is something your ISP
+can see, while traffic inside the tunnel that is already running is not.
+
+On the VPS, a script that emits the config as a tar stream, and a key that can
+run **only** that:
+
+```bash
+# from relay/relay-config-dump.sh in this repo
+scp relay/relay-config-dump.sh root@<vps>:/usr/local/sbin/
+chmod 700 /usr/local/sbin/relay-config-dump.sh
+
+cat >> /root/.ssh/authorized_keys <<'EOF'
+command="/usr/local/sbin/relay-config-dump.sh",restrict ssh-ed25519 AAAA... homelab-backup
+EOF
+```
+
+`command=...,restrict` is the point: that key cannot open a shell, forward a
+port or run anything else. If it is stolen from the homelab, it yields the
+config and nothing more. The trust direction stays right — home is the trusted
+side, the VPS is the exposed one, and neither gains power over the other.
+
+The homelab end runs inside the tunnel's network namespace, which is what makes
+`10.77.0.1` reachable at all:
+
+```bash
+docker run --rm --network container:wg-relay -v ~/.ssh:/ssh:ro alpine \
+  sh -c "apk add -q --no-cache openssh-client && ssh -i /ssh/id_ed25519 root@10.77.0.1" \
+  > relay-config.tar.gz
+```
+
+A relay that cannot be reached **warns and is skipped**, never failing the run:
+the rest of the backup matters more, and a relay being down is alerted on
+separately (Step 13.6).
+
+## Step 13.5 — Alert on a backup that stops happening
 
 The dangerous failure is not a loud one, it is silence. A **push** monitor in
 Uptime Kuma covers that: the script pings it on success, and Kuma alerts when
@@ -180,7 +222,38 @@ the ping stops.
 Success is deliberately **not** pushed to the phone. A notification every night
 is one you learn to ignore.
 
-## Step 13.5 — Restore, which is the only thing that matters
+## Step 13.6 — Something outside the house has to watch the house
+
+Every alarm so far — Uptime Kuma, ntfy, this backup's push monitor — runs on the
+machine being watched. When that machine dies, so does every way of telling you.
+A crash here took the household's DNS down for 35 minutes and nothing reported
+it; the people affected found out by trying to use the internet.
+
+If you have the relay VPS, you already own a second machine that fails
+independently. Put the watcher there:
+
+```bash
+# from relay/home-watch.sh in this repo; set the topic before installing
+scp relay/home-watch.sh root@<vps>:/usr/local/sbin/
+chmod 700 /usr/local/sbin/home-watch.sh
+echo '*/5 * * * * root /usr/local/sbin/home-watch.sh' > /etc/cron.d/home-watch
+```
+
+It checks two things every five minutes: the age of the WireGuard handshake, and
+whether the reverse proxy at home still answers through the tunnel. Either one
+failing means the house is unreachable.
+
+It reports through **ntfy.sh**, the public service, rather than your own ntfy —
+for exactly the reason this step exists. Only a one-line status leaves the VPS
+("the relay cannot reach home"), and the topic name is the secret, so generate
+it rather than choosing it. Subscribe your phone to that topic on
+`https://ntfy.sh`, separately from your own server.
+
+It alerts on the transition, repeats at most hourly while down, and says so
+again when the tunnel comes back — silence in between, so the alert still means
+something when it arrives.
+
+## Step 13.7 — Restore, which is the only thing that matters
 
 Run this at least once, now, and again whenever the include list changes.
 
