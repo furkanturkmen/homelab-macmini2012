@@ -635,6 +635,17 @@ services:
     image: binwiederhier/ntfy:latest
     restart: unless-stopped
     command: serve
+    # An alarm must not depend on the thing it is alarming about. Every other
+    # container resolves through Pi-hole only; if Pi-hole is what died, ntfy
+    # could not resolve ntfy.sh, the iOS wake-up ping would never be sent, and
+    # the alert about DNS being down would sit here undelivered.
+    #
+    # Pi-hole still answers first, so the fallback is only reached during an
+    # outage, and the only external name ntfy ever looks up is ntfy.sh - which
+    # the ISP can already see in the TLS handshake of the pings themselves.
+    dns:
+      - "${HOST_LAN_IP}"
+      - 9.9.9.9
     ports:
       - "8095:80"
     environment:
