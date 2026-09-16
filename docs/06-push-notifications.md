@@ -114,6 +114,32 @@ notification exists. Settings → Notifications → **Setup Notification**:
   (Step 6.2), so no ntfy password ends up in Kuma's database
 - Tick **Default enabled** and **Apply on all existing monitors**, then **Test**
 
+### What is worth a monitor, and what a monitor cannot tell you
+
+A web check on each service is the obvious half. The useful half is monitoring
+the things whose failure is **silent** — nothing errors, nothing appears, you
+simply stop being told:
+
+| Monitor | Type | Catches |
+|---|---|---|
+| each service's URL | HTTP | the ordinary case: it stopped answering |
+| Pi-hole `:53` and the encrypted upstream `:5053` | DNS | the resolver dying while Pi-hole still answers from cache |
+| a public name, e.g. `https://jellyfin.yourdomain.tld/health` | Keyword | the whole relay chain from outside, not just the service |
+| the content-filter canary ([Phase 12](12-content-filters.md)) | Keyword | filtering broken by an update, before a child notices |
+| `jellylab-push` `/health` | Keyword `"ok":true` | filter syncing stopped while the process still listens |
+| the nightly backup ([Phase 13](13-backups.md)) | **Push** | a backup that quietly never ran |
+
+Prefer a **Keyword** check over a plain status check wherever the service
+returns something meaningful: a process can answer 200 while being useless, and
+`"ok":true` is the difference between "listening" and "working".
+
+> **The blind spot:** these alerts travel through ntfy. If ntfy itself dies, the
+> alarm about ntfy cannot reach you — a monitor on it turns the status page red
+> and nothing else. Two mitigations, both optional: a second notification
+> channel in Kuma (email is free and independent), or treating the backup's push
+> monitor as your canary, since it exercises Kuma, the schedule and the whole
+> chain every night.
+
 ## Step 6.5 — The phone
 
 > **Native notifications inside your own iOS app need a paid Apple Developer
