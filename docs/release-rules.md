@@ -50,7 +50,7 @@ below that: a hardsubbed release at −10000 (R12), an Italian dub at −1000.
 > the same situation did. Found by tallying real rejection reasons, not by
 > reading the config: 12 releases in one sample carried
 > `Custom Formats HEVC (x265) have score -20 below Movie's profile minimum 0`.
-> `scripts/fix-grab-rules.py` sets both.
+> `scripts/apply-release-rules.py` sets both.
 
 ## R2 — The title is written by the attacker
 
@@ -264,6 +264,26 @@ Set every `minSize` to **0** and keep `maxSize` as the sanity ceiling; a
 plausible upper bound still catches the remux that would otherwise beat every
 sane encode (R11). Radarr already ships `minSize: 0`, which is the correct
 default and another instance of R7: the two apps disagreed and nobody noticed.
+
+Owned by `scripts/apply-release-rules.py`, along with the score and the
+recycle bin. An earlier one-off script set the same values and then drifted
+from this one — the dry run wanted to reset `minFormatScore` to 0 and undo the
+fix. One file owns grab behaviour, for the same reason R8 gives.
+
+## R14 — Deleting should be undoable, and the disk needs a floor
+
+Both apps delete immediately. An upgrade replaces a file, a cleanup tool
+removes a download, and the only copy is gone — which nearly cost a season here
+when a queue cleaner removed five live downloads.
+
+Set a **recycle bin** on the *same filesystem* as the library (`/media/.recyclebin`,
+dot-prefixed so Jellyfin does not index it). A delete becomes a move: instant,
+no extra space while it sits there, and reversible for `recycleBinCleanupDays`.
+Hardlinked library files are unaffected either way.
+
+`minimumFreeSpaceWhenImporting` ships as **100 MB**, meaning "keep importing
+until the disk is 100 MB from full". A full media disk takes down every service
+writing to it, including the ones that have nothing to do with media. 10 GB.
 
 ## How to find out which rule is costing you
 

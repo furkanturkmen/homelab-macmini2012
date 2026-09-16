@@ -20,6 +20,13 @@ import urllib.error
 import urllib.request
 
 HOST = os.environ.get('ARR_HOST', '192.168.68.59')
+# Inside the containers; /media is the shared library mount.
+RECYCLE_BIN = os.environ.get('RECYCLE_BIN', '/media/.recyclebin')
+# R1: low enough that HEVC (-20) and AV1 (-25) stay last resorts rather
+# than refusals, high enough that a hardsub (-10000) is refused outright.
+# Anime exists almost only in those codecs now; 0 made whole titles
+# unobtainable. The same value must be set in BOTH apps (R7).
+MIN_FORMAT_SCORE = int(os.environ.get('MIN_FORMAT_SCORE', '-25'))
 ENV = os.path.expanduser('~/homelab/.env')
 
 # R8 and R9 used to live here - which qualities each profile allows, and the
@@ -156,9 +163,9 @@ def ensure_profiles(a, scores):
             p['upgradeAllowed'] = over['upgradeAllowed']
             dirty = True
 
-        if p.get('minFormatScore') != 0:
-            a.say(f'{label}: minFormatScore {p.get("minFormatScore")} -> 0')
-            p['minFormatScore'] = 0
+        if p.get('minFormatScore') != MIN_FORMAT_SCORE:
+            a.say(f'{label}: minFormatScore {p.get("minFormatScore")} -> {MIN_FORMAT_SCORE}')
+            p['minFormatScore'] = MIN_FORMAT_SCORE
             dirty = True
 
         for item in p.get('formatItems', []):
@@ -172,6 +179,59 @@ def ensure_profiles(a, scores):
             a.say(f'{label}: already correct', False)
         elif a.apply:
             a.write(f'qualityprofile/{p["id"]}', p, 'PUT')
+
+
+def ensure_media_management(a, recycle_bin, min_free_mb=10240):
+    """A 7-day undo, and a floor under the disk.
+
+    Both apps delete immediately by default: an upgrade replaces a file, a
+    cleanup tool removes a download, and the only copy is gone. A recycle bin
+    on the *same filesystem* makes that a move rather than a delete, so it
+    costs nothing and is reversible for a week. Hardlinked library files are
+    unaffected either way.
+
+    `minimumFreeSpaceWhenImporting` ships as 100 MB, which means "keep
+    importing until the disk is 100 MB from full". A full media disk takes
+    every service writing to it down with it.
+    """
+    cfg = a.get('config/mediamanagement')
+    want = {
+        'recycleBin': recycle_bin,
+        'recycleBinCleanupDays': 7,
+        'minimumFreeSpaceWhenImporting': min_free_mb,
+    }
+    if all(cfg.get(k) == v for k, v in want.items()):
+        a.say('media management already correct', False)
+        return
+    for k, v in want.items():
+        if cfg.get(k) != v:
+            a.say(f'{k}: {cfg.get(k)!r} -> {v!r}')
+    if not a.apply:
+        return
+    cfg.update(want)
+    a.write(f'config/mediamanagement/{cfg["id"]}', cfg, 'PUT')
+
+
+def ensure_no_size_floor(a):
+    """R13 - a minimum size rejects the most efficient encodes.
+
+    Sonarr ships 3-4 MB per minute as a floor, which refused a complete
+    30-episode HEVC season for being 2.8 GB. Efficiency is what makes a file
+    small. It is a poor forgery check too: the size is a number the uploader
+    chose, and torrent-guard opens the file instead (R5). maxSize stays as the
+    sanity ceiling.
+    """
+    touched = 0
+    for d in a.get('qualitydefinition'):
+        if not d.get('minSize'):
+            continue
+        a.say(f'{d["quality"]["name"]}: minSize {d["minSize"]} -> 0')
+        touched += 1
+        if a.apply:
+            d['minSize'] = 0
+            a.write(f'qualitydefinition/{d["id"]}', d, 'PUT')
+    if not touched:
+        a.say('no size floors set', False)
 
 
 def ensure_metadata(a):
@@ -229,6 +289,11 @@ def main():
             ensure_profiles(a, {'Repack/Proper': 5, 'Italian release': -1000,
                                 'HEVC (x265)': -20, 'AV1': -25,
                                 'French hardsub (VOSTFR)': -10000})
+            # Container path, and it must sit on the same filesystem as the
+            # library or every delete becomes a slow copy. Dot-prefixed so
+            # Jellyfin does not index it as a library.
+            ensure_media_management(a, RECYCLE_BIN)
+            ensure_no_size_floor(a)
             ensure_metadata(a)
         except urllib.error.HTTPError as e:
             print(f'  !! {name} {e.code}: {e.read().decode()[:200]}')
