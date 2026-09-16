@@ -130,6 +130,35 @@ Create admin username + password immediately. If you wait more than ~5 minutes a
 
 Default login: `admin@example.com` / `changeme`. NPM forces a change on first login — set a real email (for Let's Encrypt certs later) and a strong password. The default account is updated in place, no cleanup needed.
 
+While you are in there: **Settings → Default Site → No Response (444)**.
+
+That is what NPM answers when a request arrives for a hostname it does not
+recognise — including anyone who simply types the server's IP address. The
+default is a "Congratulations! You've successfully started Nginx Proxy Manager"
+page returned with HTTP 200, which tells every device on your network exactly
+what is running here. `444` is nginx's "close the connection and send nothing":
+no page, no headers, no version banner.
+
+The option above it, **404 Page**, still answers — a status line, headers, a
+body. Silence gives away strictly less.
+
+Nothing legitimate breaks, because every real name is a proxy host and matches
+its own server block. Certificate renewals are unaffected: the ACME challenge
+carries the correct `Host` header. Only bare-IP browsing goes quiet, and the
+three ways it can fail are worth being able to tell apart:
+
+| Browser error | Meaning |
+|---|---|
+| `ERR_EMPTY_RESPONSE` | reached NPM, which chose not to answer — this is 444 |
+| `ERR_CONNECTION_TIMED_OUT` | no route; nothing was reached at all |
+| `ERR_NAME_NOT_RESOLVED` | DNS has no such name; no connection was attempted |
+
+The other dashboard tiles stay empty on purpose. **Redirection Hosts** point one
+name at another (you have no aliases), **Streams** forward non-HTTP ports (the
+game server publishes its own, and [Phase 10](10-public-relay.md) does its
+stream forwarding on the VPS), and **404 Hosts** answer a *named* list politely —
+which the Default Site now covers for every name at once.
+
 **3. Nextcloud — `http://homelab:8081` (first load takes 30-60s, install takes 2-5min more)**
 
 Create admin account. Nextcloud then runs DB migrations + generates config — **don't close the tab or refresh mid-install**, interruption corrupts state. When it lands on "Recommended apps", pick **Skip** (add Calendar/Contacts/Mail/etc. individually later; skip Nextcloud Office/Collabora entirely — it eats 400+ MB idle).
