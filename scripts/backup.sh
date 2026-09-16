@@ -207,11 +207,19 @@ if [ "$(date +%u)" = "7" ]; then
     "$RESTIC_IMAGE" -r "$REPO" check --read-data-subset=5%
 fi
 
+# Parse the JSON properly. Grepping the first "short_id" out of it returned the
+# oldest snapshot in the list, so the "finished" line and the Kuma message both
+# named a snapshot this run had not created.
 SNAPSHOT=$(docker run --rm --network "$NETWORK" \
   -e B2_ACCOUNT_ID -e B2_ACCOUNT_KEY -e RESTIC_PASSWORD \
   -e HTTP_PROXY="$PROXY" -e HTTPS_PROXY="$PROXY" \
   "$RESTIC_IMAGE" -r "$REPO" snapshots --latest 1 --json 2>/dev/null \
-  | tr ',' '\n' | grep -o '"short_id":"[^"]*"' | cut -d'"' -f4 || echo unknown)
+  | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+    print(d[-1]["short_id"] if d else "none")
+except Exception:
+    print("unknown")' 2>/dev/null || echo unknown)
 
 rm -rf "$STAGING"
 trap - ERR
