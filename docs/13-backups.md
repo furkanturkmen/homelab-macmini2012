@@ -9,6 +9,13 @@ downloaded again.
 This phase copies the irreplaceable parts to Backblaze B2 every night,
 encrypted before they leave the house, through the VPN.
 
+> Sending it through the VPN assumes gluetun from [Phase 7](07-qbittorrent-vpn.md).
+> Without it the backup works exactly the same — drop the two `HTTPS_PROXY` /
+> `HTTP_PROXY` lines (or set `BACKUP_PROXY=`) and restic talks to Backblaze
+> directly. The only difference is that your ISP can then see you back up to
+> Backblaze nightly, never what is in it. Nothing here needs
+> [Phase 10](10-public-relay.md).
+
 ```
 sqlite snapshots + mysqldump ──┐
 config, keys, .env            ─┼─▶ restic (encrypts) ─▶ gluetun (VPN) ─▶ Backblaze B2
