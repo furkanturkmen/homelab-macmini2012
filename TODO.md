@@ -9,6 +9,24 @@ after it. Once the basics work, add these one at a time:
 - **Paperless-ngx** — scan documents, OCR them, searchable archive
 - **A second machine** — once you outgrow the Mac Mini, get a used Dell OptiPlex or Lenovo ThinkCentre ($100-200), install Proxmox, run VMs
 
+## Configuring what is already running
+
+Not new services — settings in the ones already here.
+
+- **Pi-hole per-client groups.** The content filters in
+  [Phase 12](docs/12-content-filters.md) cover Jellyfin and Seerr — the *media*.
+  The open web is filtered identically for everyone in the house. Pi-hole
+  supports client groups, so the children's devices can carry stricter
+  blocklists than yours. Needs the devices identified first (Pi-hole lists them
+  under Clients once they have made a query), then a group per policy. The
+  natural complement to the per-user media filters, and currently missing.
+- **Jellyfin per-user streaming limits.** Everyone is `remoteBitrateLimit:
+  unlimited`, `maxSessions: unlimited`, and everyone except one account may
+  transcode. On an HD 4000, two simultaneous transcodes is a bad afternoon. A
+  remote bitrate cap and a session limit per account bound that before it
+  becomes a support call. Nobody has hit it yet, which is why it is here and not
+  in the guide.
+
 Done and moved into the guide:
 
 - **Public links for friends**, through a relay VPS instead of Cloudflare
