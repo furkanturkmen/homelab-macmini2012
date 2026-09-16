@@ -257,6 +257,43 @@ grep -h "Detected external IP" ~/homelab/qbittorrent/config/qBittorrent/logs/qbi
 A single unfamiliar address in that list can be a peer reporting a wrong one;
 qBittorrent inside gluetun has no other way out.
 
+## Step 7.9 — Cap the download rate, or the house loses the internet
+
+A download running flat out will make the rest of the household believe the
+internet is broken — pages hang, video buffers, someone asks what you did. The
+line is not "full"; it is **bufferbloat**. A saturated downlink fills the
+queues between you and your ISP, every packet waits behind the torrent's, and
+the first casualty is DNS, because a lookup that takes 3 seconds feels exactly
+like being offline.
+
+It looks like a DNS fault and it is not. Before blaming Pi-hole, check whether
+the client is sitting at its ceiling:
+
+```bash
+docker exec gluetun sh -lc "wget -qO- http://127.0.0.1:8083/api/v2/transfer/info"
+# dl_info_speed at or near dl_rate_limit = saturated
+```
+
+Three facts separate this from an actual outage: Pi-hole answers normally when
+queried directly, the encrypted upstream still resolves, and **Uptime Kuma
+records nothing** — the monitors are inside the house and never leave it.
+
+The fix is a cap, not a fair-queueing project:
+
+```bash
+docker exec gluetun sh -lc \
+  'wget -qO- --post-data="limit=6291456" http://127.0.0.1:8083/api/v2/transfer/setDownloadLimit'
+# 6291456 = 6 MiB/s ≈ 50 Mbit/s. It persists in qBittorrent's config.
+```
+
+Pick roughly **half** of what the line can do. Here 100 Mbit/s was enough to
+break DNS for everyone while 50 Mbit/s is invisible, and the difference on a
+38 GB download is about twenty minutes. That is a good trade for never being
+asked to fix the wifi again.
+
+Proper QoS on the router (fq_codel, cake) solves bufferbloat without giving up
+throughput, but it needs a router that supports it. The cap costs one command.
+
 ---
 
 [← Phase 6: Push notifications when a download finishes](06-push-notifications.md) · [All phases](README.md) · [Phase 8: Stop the server transcoding: prefer H.264 at grab time →](08-prefer-h264.md)
