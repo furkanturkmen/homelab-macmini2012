@@ -129,7 +129,8 @@ notification exists. Settings → Notifications → **Setup Notification**:
 
 Off-LAN this needs Netbird up, since the server is only reachable inside your
 network. The wake-up still arrives via ntfy.sh, but fetching the message body
-needs a route to the mini.
+needs a route to the mini. [Step 6.7](#step-67--optional-reach-ntfy-without-the-vpn)
+removes that requirement.
 
 ## What you end up with
 
@@ -200,6 +201,83 @@ curl http://<ip>:8099/health     # {"ok":true,"devices":0}
 `devices` is how many phones have registered. It stays 0 until the entitlement
 exists.
 
+
+---
+
+## Step 6.7 — Optional: reach ntfy without the VPN
+
+Needs [Phase 10](10-public-relay.md). Skip it if you always have the mesh VPN on.
+
+**The symptom that sends you here:** pushes arrive, but instead of the message
+you get a placeholder — a notification titled *ntfy* saying *message*. Nothing
+is broken. ntfy.sh only relays a **wake-up ping**; the phone then fetches the
+body from `NTFY_BASE_URL`, and if that address is only reachable over the VPN,
+the fetch fails and iOS shows the placeholder. Turning the VPN on fills the
+text in instantly, which is the quickest way to confirm the diagnosis.
+
+Publishing it through the relay makes the body reachable from anywhere.
+
+1. **DNS.** An A record for `push.yourdomain.tld` → your VPS. Some registrars
+   point a new subdomain at their own hosting by default; change it to the
+   VPS address, or Let's Encrypt cannot validate.
+2. **VPS.** Add the name to the SNI allowlist and the port-80 acme
+   `server_name` ([Step 10.4](10-public-relay.md), [Step 10.6](10-public-relay.md)).
+3. **npm.** A proxy host → `ntfy`:`80`, **Websockets Support on** (ntfy
+   subscribes over a long-lived stream), then request the certificate, then in
+   a **second save** switch on Force SSL and HTTP/2 ([Step 10.6](10-public-relay.md)
+   explains why it must be a second save).
+4. **Refuse writes from outside.** In the host's **Advanced** tab:
+
+   ```nginx
+   if ($request_method !~ ^(GET|HEAD)$) {
+       return 403;
+   }
+   ```
+
+   Subscribing and fetching are `GET`; publishing is `POST`/`PUT`. Your own
+   services publish over the Docker network and never through this host, so
+   they are unaffected — while the anonymous write access from
+   [Step 6.2](#step-62--lock-the-topic-down), which is safe on a private
+   address, never becomes an open spam endpoint on a public one.
+
+   > `limit_except GET { deny all; }` looks like the right tool and is not:
+   > npm puts the Advanced block in `server` context, and `limit_except` is
+   > only valid inside a `location`. nginx's config test rejects it.
+
+5. **Point ntfy at the public name** and recreate it:
+
+   ```
+   NTFY_BASE_URL=https://push.yourdomain.tld
+   ```
+   ```bash
+   docker compose up -d ntfy
+   ```
+
+6. **Re-subscribe on the phone.** ntfy derives the ntfy.sh wake-up topic from
+   the base URL, so changing it **silently orphans the old subscription**. Add
+   the new server under Manage users, set it as the default server, unsubscribe
+   the old topic and subscribe again. Same topic name — no need to rotate it,
+   because reads were already behind a login.
+
+Verify, from a machine that is *not* on your LAN:
+
+```bash
+curl -s -o /dev/null -w "health      %{http_code}\n" https://push.yourdomain.tld/v1/health          # 200
+curl -s -o /dev/null -w "publish     %{http_code}\n" -d x https://push.yourdomain.tld/$NTFY_TOPIC   # 403
+curl -s -o /dev/null -w "read noauth %{http_code}\n" "https://push.yourdomain.tld/$NTFY_TOPIC/json?poll=1"  # 403
+curl -s -u "$NTFY_USER:$NTFY_PASSWORD" "https://push.yourdomain.tld/$NTFY_TOPIC/json?poll=1" | tail -2      # the messages
+```
+
+> **Testing from the VPS itself will fail with `000`** if you added the country
+> filter in [Step 10.4](10-public-relay.md) — the VPS drops its own request for
+> being outside the allowed country. Test from a machine on the LAN instead,
+> forcing the public path:
+> `curl --resolve push.yourdomain.tld:443:<vps-ip> https://push.yourdomain.tld/v1/health`
+
+Two limits to accept: with a country filter you are back to placeholders when
+travelling abroad, and the anonymous write rule still exists inside ntfy — it
+is only unreachable because npm refuses the method. Exposing ntfy by any other
+route reopens it.
 ---
 
 [← Phase 5: Remote access with Netbird](05-netbird.md) · [All phases](README.md) · [Phase 7: Route qBittorrent through a VPN →](07-qbittorrent-vpn.md)

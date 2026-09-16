@@ -70,7 +70,70 @@ Rollback, if anything misbehaves:
 docker exec pihole pihole-FTL --config dns.upstreams '["8.8.8.8","8.8.4.4"]'
 ```
 
-## Step 11.4 — Watch it
+## Step 11.4 — The server itself is probably still leaking
+
+Everything above covers *devices on the network*. It does not necessarily cover
+**the machine running all of this**, and that machine is the one doing most of
+the talking: Sonarr and Radarr asking their metadata services, Jellyfin's
+plugins, Seerr, Watchtower, every image pull.
+
+Containers don't read `/etc/resolv.conf` themselves. Docker gives them
+`127.0.0.11`, an embedded resolver that forwards to whatever the **host** has.
+So the host's resolver decides for all of them, and on this host it had been
+pointed at the mesh VPN (Phase 5), whose nameserver rule matched only
+`homelab.internal` and `homelab.lan`. Everything else was forwarded to the
+resolver from before the VPN was installed — `1.1.1.1`, in plain text.
+
+That is invisible unless you look for it. **Do not test this with `dig`**: a
+`dig @…` proves only that the server you named can answer. Ask instead whether
+Pi-hole ever *saw* the query:
+
+```bash
+# 1. a name nothing has ever looked up, asked from inside a container
+probe="dnsproof-$(date +%s).example.com"
+docker exec sonarr getent hosts "$probe"
+
+# 2. did Pi-hole see it?  (API: POST /api/auth for a SID, then /api/queries)
+#    Pi-hole's own query log in the UI does just as well.
+```
+
+If the probe is absent, those lookups never reached Pi-hole. A second tell: the
+client list in Pi-hole's dashboard contains laptops and phones but **never the
+server's own address**. And to see who is really answering:
+
+```bash
+dig +short whoami.akamai.net        # returns the resolver's egress address
+```
+
+The fix is one file, and it survives removing the VPN later:
+
+```json
+/etc/docker/daemon.json
+{ "dns": ["192.168.1.42"] }
+```
+
+```bash
+sudo systemctl restart docker   # restarts every container
+```
+
+Every container then asks Pi-hole directly, and Pi-hole forwards over HTTPS as
+in Step 11.3. Re-run the probe afterwards: Pi-hole should log it, forwarded to
+`192.168.1.42#5053`, and `whoami.akamai.net` should return the encrypted
+resolver's address rather than the old one.
+
+Two things worth knowing before running it:
+
+- **It restarts everything.** Check nobody is watching first. If `/mnt/storage`
+  or an equivalent mount is involved, note that the empty-mount race is a *boot*
+  problem — a manual restart is safe because the disk is already mounted.
+- **No loop is created.** Pi-hole's upstream is an IP (`…#5053`), dnscrypt-proxy
+  bootstraps by IP, and the VPN container's endpoint is an IP — none of them
+  need DNS to come up.
+
+A welcome side effect: the containers now get the blocklists too. They never did
+before.
+
+## Step 11.5 — Watch it
 
 dnscrypt-proxy is now a single point of failure for the household's DNS. Two
 safeguards:
