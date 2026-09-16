@@ -338,6 +338,49 @@ curl -s -o /dev/null -w "%{http_code}\n" -H "X-Api-Key: <seerr api key>" http://
 
 Nothing to install, and no VPN. For each person:
 
+### The checklist
+
+A new person's rules live in four places, and **only the first is in the
+Jellyfin UI**. The other three are each a default that is wrong, so a person
+added in a hurry ends up with no lockout and no content filter — which is how
+two accounts here went public unfiltered for a day.
+
+| | What | Where | If skipped |
+|---|---|---|---|
+| 1 | Account, password, libraries | Jellyfin → Dashboard → Users → **+** | — |
+| 2 | `LoginAttemptsBeforeLockout` = 10 | same page; **defaults to `-1`** | unlimited password guesses |
+| 3 | Content filter | `http://<mac-mini-ip>:8099/filters/admin`, at home | **no entry = they see everything** |
+| 4 | Seerr permissions | created at their first sign-in | see below |
+
+Step 3 is the one that goes wrong quietly, because nothing anywhere reports a
+person who has no filter. [Phase 12](12-content-filters.md) fails closed on a
+*broken* store, not on a *missing person*: someone with no entry is simply
+unfiltered, exactly like the adults. Set the filter **before** sending the
+links, not after.
+
+Step 4 needs no action in the normal case — the first Seerr sign-in creates the
+account with the default permissions (Request). Never give an account that uses
+the public links **Admin**, **Manage Settings** or **Manage Users**: seerr-guard
+refuses those through the relay (Step 10.7), so the effect is not a security
+downgrade but a person who cannot sign in from outside at all.
+
+Check the whole household in one go:
+
+```bash
+# every account: lockout must be 10, never -1
+curl -s -H 'Authorization: MediaBrowser Token="<jellyfin api key>"' \
+  http://<mac-mini-ip>:8096/Users |
+  python3 -c 'import json,sys; [print(f"{u[\"Name\"]:<16}{u[\"Policy\"][\"LoginAttemptsBeforeLockout\"]:>4}  blockedTags={len(u[\"Policy\"][\"BlockedTags\"])}") for u in json.load(sys.stdin)]'
+
+# who is in the filter store, and who is not
+python3 -c 'import json; s=json.load(open("jellylab-push-data/content-filters.json")); print(list(s["users"]))'
+```
+
+A non-zero `blockedTags` is the proof the filter reached Jellyfin: jellylab-push
+writes the person's markers there from the store, within minutes of a change.
+
+### The details
+
 1. A **Jellyfin account of their own** (Dashboard → Users → **+**) with a strong
    password, limited to the libraries they should see. The relay's country
    filter is not a lock; the password is.
