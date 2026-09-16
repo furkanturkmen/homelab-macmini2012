@@ -91,28 +91,44 @@ def ensure_propers(a):
         a.write('config/mediamanagement', cfg, 'PUT')
 
 
-def ensure_format(a, name, regex):
+def ensure_format(a, name, regex, group_regex=None):
     """R0b and R7 - a custom format exists.
 
     The shape is copied from the formats already in Sonarr, so these sit
     alongside them rather than looking foreign in the UI.
+
+    With a group_regex the two conditions are an OR (neither is `required`),
+    which is what R12 needs: the title carries the marker on the way in, and
+    the release group is the only thing still known about a file already
+    imported. Matching the group is what re-scores what is on disk, and an
+    upgrade is only possible once the file on disk scores badly.
     """
     if name in {c['name'] for c in a.get('customformat')}:
         a.say(f'custom format "{name}" exists', False)
         return
-    a.say(f'create custom format "{name}"  {regex}')
+    a.say(f'create custom format "{name}"  {regex}'
+          + (f'  or group {group_regex}' if group_regex else ''))
     if not a.apply:
         return
+    specs = [{
+        'name': name,
+        'implementation': 'ReleaseTitleSpecification',
+        'negate': False,
+        'required': not group_regex,
+        'fields': [{'name': 'value', 'value': regex}],
+    }]
+    if group_regex:
+        specs.append({
+            'name': f'{name} (group)',
+            'implementation': 'ReleaseGroupSpecification',
+            'negate': False,
+            'required': False,
+            'fields': [{'name': 'value', 'value': group_regex}],
+        })
     a.write('customformat', {
         'name': name,
         'includeCustomFormatWhenRenaming': False,
-        'specifications': [{
-            'name': name,
-            'implementation': 'ReleaseTitleSpecification',
-            'negate': False,
-            'required': True,
-            'fields': [{'name': 'value', 'value': regex}],
-        }],
+        'specifications': specs,
     }, 'POST')
 
 
@@ -206,8 +222,13 @@ def main():
             ensure_format(a, 'Repack/Proper', r'\b(PROPER|REPACK)\b')
             if name == 'radarr':
                 ensure_format(a, 'Italian release', r'\b(ITA|ITALIAN)\b')
+            # R12 - burned-in subtitles cannot be turned off, ever.
+            ensure_format(a, 'French hardsub (VOSTFR)',
+                          r'\bVOSTFR\b|\bVOSTA\b|\bHARDSUB',
+                          group_regex=r'Tsundere-Raws')
             ensure_profiles(a, {'Repack/Proper': 5, 'Italian release': -1000,
-                                'HEVC (x265)': -20, 'AV1': -25})
+                                'HEVC (x265)': -20, 'AV1': -25,
+                                'French hardsub (VOSTFR)': -10000})
             ensure_metadata(a)
         except urllib.error.HTTPError as e:
             print(f'  !! {name} {e.code}: {e.read().decode()[:200]}')
