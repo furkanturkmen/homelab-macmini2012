@@ -27,16 +27,30 @@ Set `doNotPrefer` on both apps. Add a `Repack/Proper` custom format at **+5** so
 genuine propers are still preferred — weighed against everything else, rather
 than trumping it.
 
-## R1 — Reject negatives outright
+## R1 — A penalty must be able to refuse, but not everything
 
 `minFormatScore: -100` means every penalty is a preference, never a refusal.
 HEVC at −20 was not "avoid this", it was "rank this lower and take it anyway".
 
-Set **0**. Anything scored negative stops being an option.
+`0` is the other extreme: **anything** scored negative stops being an option.
+That was the setting here for a while, and for films it is defensible — Fall
+had 42 clean x264 candidates. For television, and for anime especially, it is
+not. Searching for one anime season in 2026 returned Judas, EMBER, ZeroBuild,
+PHTMini, Maximus and Reaktor — **every current group encodes in HEVC or AV1**.
+At `0`, that title is not "ranked lower", it is unobtainable, and it sits in
+searching forever with no error anywhere (R8 again).
 
-The trade: a title existing *only* in x265 finds nothing and sits in searching.
-Grab it by hand when that happens. Fall had 42 clean x264 candidates, so at
-1080p this is rare.
+Set **−25**, in *both* apps. H.264 at +15 still wins every time it exists;
+HEVC (−20) and AV1 (−25) are accepted only when nothing else is. The genuinely
+unacceptable stays refused, because the things worth refusing are scored far
+below that: a hardsubbed release at −10000 (R12), an Italian dub at −1000.
+
+> **Both apps, the same number.** Radarr sat at `0` while Sonarr was at `−25`,
+> so a film existing only in x265 silently never downloaded while an episode in
+> the same situation did. Found by tallying real rejection reasons, not by
+> reading the config: 12 releases in one sample carried
+> `Custom Formats HEVC (x265) have score -20 below Movie's profile minimum 0`.
+> `scripts/fix-grab-rules.py` sets both.
 
 ## R2 — The title is written by the attacker
 
@@ -228,6 +242,55 @@ curl -s -X POST -H "X-Api-Key: <key>" -H 'Content-Type: application/json' \
 A pushed release is grabbed like any other, and the queue takes about a minute
 to show it — it was briefly empty here while the client already had the torrent.
 Check the client before concluding anything was lost.
+
+## R13 — A size floor rejects the best encodes
+
+Sonarr ships a **minimum** size per quality: 3–4 MB per minute at 720p and
+1080p. It reads as a sanity check. What it actually does is refuse the most
+efficient encodes, because efficiency is exactly what makes a file small:
+
+```
+2.8 GB is smaller than minimum allowed 3.2 GB (for 30x 819min)
+```
+
+That is a complete 30-episode season in HEVC, refused **for being too small**.
+Nothing about it was wrong.
+
+It is also a poor forgery check, for the same reason as R2: the size is a number
+chosen by whoever made the torrent, and malware is happy to be 4 GB. The check
+that works opens the file and looks inside — `torrent-guard.py` (R5).
+
+Set every `minSize` to **0** and keep `maxSize` as the sanity ceiling; a
+plausible upper bound still catches the remux that would otherwise beat every
+sane encode (R11). Radarr already ships `minSize: 0`, which is the correct
+default and another instance of R7: the two apps disagreed and nobody noticed.
+
+## How to find out which rule is costing you
+
+Do not reason about it from the config — measure. Run interactive searches on
+things that are actually missing and tally the rejection reasons:
+
+```bash
+GET /api/v3/release?seriesId=<id>&seasonNumber=<n>     # sonarr
+GET /api/v3/release?movieId=<id>                       # radarr
+```
+
+Each release carries `rejected` and `rejections[]`. Count them, and count
+separately how many were rejected by **exactly one** rule — that number is what
+the rule costs you. In one audit here, 508 releases produced 481 rejections, of
+which:
+
+| Reason | Count | Verdict |
+|---|---|---|
+| Unknown Movie / Wrong movie / Unknown Series | 342 | indexer noise, releases for other titles |
+| Existing file meets cutoff | 156 | correct — you already have it |
+| HEVC below profile minimum | 12 | **a real loss** — fixed by R1 |
+| Smaller than minimum allowed | 7 | **a real loss** — fixed by R13 |
+| TELESYNC / hardcoded subs / wrong language | 12 | correct — those are cam rips |
+
+The instinct that "the scoring is too strict" was half right: two rules were
+costing downloads and the rest of that scary-looking 481 was the system working.
+Measuring is what separated them.
 
 ## Traps, all found the hard way
 
