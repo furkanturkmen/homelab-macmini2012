@@ -257,7 +257,36 @@ grep -h "Detected external IP" ~/homelab/qbittorrent/config/qBittorrent/logs/qbi
 A single unfamiliar address in that list can be a peer reporting a wrong one;
 qBittorrent inside gluetun has no other way out.
 
-## Step 7.9 — Cap the download rate, or the house loses the internet
+## Step 7.9 — Bound the seeding, or nothing is ever cleaned up
+
+Radarr and Sonarr ship with **Remove Completed Downloads** enabled, and it
+sounds like it already handles this. It does not, on its own: they only remove a
+torrent once the client reports it has *finished seeding*. With no limits set,
+that never happens, so every torrent seeds forever and its download copy stays
+on disk indefinitely.
+
+The loop needs both halves. In qBittorrent, Options → BitTorrent → Seeding
+Limits, or over the API:
+
+```bash
+docker exec gluetun sh -lc 'wget -qO- --post-data="json={\"max_ratio_enabled\":true,\"max_ratio\":2.0,\"max_ratio_act\":0,\"max_seeding_time_enabled\":true,\"max_seeding_time\":20160}" http://127.0.0.1:8083/api/v2/app/setPreferences'
+```
+
+Ratio **2.0** or **14 days**, whichever comes first, then **pause** — action `0`.
+
+Pause, not "remove and delete files". The difference matters: paused hands the
+decision back to Radarr and Sonarr, which delete only what they actually
+imported. Letting qBittorrent delete would also remove a download whose import
+had failed, which is the one copy you still need.
+
+Nothing is lost when the files go, because the library holds **hardlinks** to
+the same data (`copyUsingHardlinks`). Removing the download copy frees only the
+directory entry; the file survives until the last link to it is gone.
+
+Ratio 2 is etiquette rather than obligation on public trackers: you give back
+twice what you took, then stop.
+
+## Step 7.10 — Cap the download rate, or the house loses the internet
 
 A download running flat out will make the rest of the household believe the
 internet is broken — pages hang, video buffers, someone asks what you did. The
