@@ -1469,13 +1469,21 @@ await loadVerdicts();
 server.listen(Number(PUSH_PORT), () => log(`listening on :${PUSH_PORT}`));
 
 /*
- * One title a minute, forever.
+ * One title every five minutes, forever.
  *
  * Deliberately unhurried: the answers change on the timescale of the release
  * scene, not of a screen refresh, and a burst of sweeps across every indexer
  * is what a rate limit is for. unref so this never holds the process open.
+ *
+ * It was a minute until 2026-09-22, when Sonarr went red with "All indexers
+ * are unavailable due to failures". A stretch of timeouts through the VPN
+ * proxy started it, but a sweep a minute across five indexers - on top of RSS
+ * sync pulling ~350 releases every 15 minutes - kept the failures coming
+ * faster than Prowlarr's backoff could clear them. Five minutes is a fifth of
+ * the queries and still far fresher than the answers themselves change.
  */
-setInterval(sweepOne, 60000).unref();
+const SWEEP_MS = Number(process.env.SWEEP_MS) || 5 * 60 * 1000;
+setInterval(sweepOne, SWEEP_MS).unref();
 setTimeout(sweepOne, 10000).unref();
 
 /*
