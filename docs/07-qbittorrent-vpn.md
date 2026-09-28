@@ -181,32 +181,52 @@ indexer from the home connection: the torrent sites logged the home address and
 every query, and the ISP saw which sites were being visited. Sonarr and Radarr
 only ever talk to Prowlarr, so Prowlarr is the one place to fix it.
 
-gluetun has an HTTP proxy built in. `HTTPPROXY: "on"` starts it on port 8888
-inside the tunnel, and `HTTPPROXY_STEALTH: "on"` stops it adding proxy headers.
-It is reachable as `gluetun:8888` on the compose network and deliberately not
-published on the host.
+Prowlarr and FlareSolverr live inside gluetun's network namespace, exactly like
+qBittorrent (`network_mode: "service:gluetun"` in the compose file). Every
+indexer request, and every Cloudflare challenge FlareSolverr solves for one,
+leaves through the tunnel because there is no other interface to leave by.
 
-In Prowlarr: **Settings → Indexers → Indexer Proxies → Add → Http**, host
-`gluetun`, port `8888`, tag `vpn`. Then give every indexer the `vpn` tag.
+This replaced a first attempt with gluetun's HTTP proxy (`gluetun:8888`, still
+on for Bazarr and backups, Step 7.8). It could not cover Cloudflare-fronted
+indexers: Prowlarr applies **one** proxy per indexer, so 1337x got either
+FlareSolverr or the VPN, never both, and Prowlarr's first request (the one that
+detects the challenge) went out from the home address either way. 1337x was
+disabled for it, and with it went most back-catalogue TV.
 
-An indexer tagged for FlareSolverr (`cf`) cannot have both: Prowlarr applies a
-single proxy per indexer, and FlareSolverr uses the normal connection. The only
-one was 1337x, so it is disabled rather than left searching from the home
-address. Knaben covers most of what it found. Moving FlareSolverr into gluetun's
-namespace would fix it properly, but vpn-guard would then also have to restart
-FlareSolverr after gluetun, and Cloudflare challenges VPN addresses harder
-anyway. Until then, do not enable an indexer that needs FlareSolverr.
+What the move needs, all in the compose file and Prowlarr's settings:
 
-The old `6881` port mappings went at the same time. qBittorrent listens on the
-forwarded port inside the tunnel, so 6881 on the host was an open port with
-nothing behind it.
+- gluetun publishes `9696` for Prowlarr, and carries the network aliases
+  `prowlarr` and `flaresolverr`, so Sonarr, Radarr, Homarr and Uptime Kuma keep
+  using `prowlarr:9696` and `flaresolverr:8191` unchanged.
+- gluetun's DNS is Proton's resolver, which cannot resolve compose names. In
+  Prowlarr, **Settings → Apps**, point Sonarr and Radarr at the host address
+  (`http://192.168.68.59:8989`, `:7878`). `FIREWALL_OUTBOUND_SUBNETS` already
+  lets the LAN through.
+- **Settings → Indexers → Indexer Proxies**: FlareSolverr's host becomes
+  `http://localhost:8191/`. Delete the old `gluetun:8888` Http proxy, because
+  `gluetun` does not resolve from inside the namespace either, and every indexer
+  tagged with it would fail.
+- vpn-guard restarts Prowlarr and FlareSolverr after gluetun, like qBittorrent.
+- Uptime Kuma runs `nscd`, which keeps the old container address for an hour
+  after the move. `docker exec uptime-kuma nscd -i hosts` clears it.
 
-Verify from inside Prowlarr's container. The two `ip=` lines must differ, and
-the second must match gluetun's public IP:
+A Cloudflare **block** is not a challenge, and FlareSolverr cannot help with it.
+`1337x.st` answers the VPN address with `error code: 1006` (IP banned), while
+`1337x.to` serves a challenge FlareSolverr solves. Set 1337x's base URL to the
+mirror that works from your exit.
+
+The old `6881` port mappings went at the same time as the first attempt.
+qBittorrent listens on the forwarded port inside the tunnel, so 6881 on the host
+was an open port with nothing behind it.
+
+Verify. The first `ip=` is home, the other two must match each other and differ
+from it:
 
 ```bash
-docker exec prowlarr curl -s https://www.cloudflare.com/cdn-cgi/trace | grep ^ip
-docker exec prowlarr curl -s -x http://gluetun:8888 https://www.cloudflare.com/cdn-cgi/trace | grep ^ip
+curl -s https://1.1.1.1/cdn-cgi/trace | grep ^ip
+docker exec prowlarr curl -s https://1.1.1.1/cdn-cgi/trace | grep ^ip
+docker exec prowlarr curl -s -X POST localhost:8191/v1 -H 'Content-Type: application/json' \
+  -d '{"cmd":"request.get","url":"https://1.1.1.1/cdn-cgi/trace"}' | grep -o 'ip=[0-9.]*'
 ```
 
 ## Step 7.8 — Subtitle searches through the tunnel, and what still is not

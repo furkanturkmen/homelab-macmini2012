@@ -24,9 +24,10 @@ Repairs, smallest first:
   script gluetun uses (gluetun's own push fails when qBittorrent is restarting
   at that moment, which is how a port goes stale);
 - anything else: restart gluetun, wait for it to be healthy with a forwarded
-  port, then restart qBittorrent, then push the port. The order is not
-  optional. qBittorrent lives in gluetun's network namespace, and a gluetun
-  restart leaves it holding a namespace that no longer exists.
+  port, then restart qBittorrent, Prowlarr and FlareSolverr, then push the
+  port. The order is not optional. All three live in gluetun's network
+  namespace, and a gluetun restart leaves them holding one that no longer
+  exists.
 
 What it leaves alone:
 
@@ -62,6 +63,7 @@ ENV_FILE = f'{COMPOSE_DIR}/.env'
 STATE_FILE = '/home/furkan/homelab-scripts/.vpn-guard-state.json'
 VPN = 'gluetun'
 QBIT = 'qbittorrent'
+NAMESPACE_PEERS = ('prowlarr', 'flaresolverr')  # also inside gluetun's namespace
 QB_API = 'http://127.0.0.1:8083/api/v2'  # from inside gluetun's namespace: no login needed
 PORT_FILE = '/tmp/gluetun/forwarded_port'
 PORT_SCRIPT = '/gluetun/update-qbit-port.sh'
@@ -223,6 +225,9 @@ def full_restart():
         if qb('/transfer/info') is not None:
             break
     steps.append('qBittorrent restarted')
+    # They share the namespace too, and would search nothing until restarted.
+    sh('docker', 'compose', '--project-directory', COMPOSE_DIR, 'restart', *NAMESPACE_PEERS, timeout=180)
+    steps.append(f'{" and ".join(NAMESPACE_PEERS)} restarted')
     if port:
         steps.append('port pushed' if push_port(port) else 'port push FAILED')
     return steps
