@@ -408,17 +408,26 @@ services:
     mem_limit: 1g
     image: linuxserver/prowlarr:latest
     restart: unless-stopped
+    # Inside gluetun's namespace, like qBittorrent. Prowlarr applies one proxy
+    # per indexer, so a Cloudflare-fronted indexer could have FlareSolverr or
+    # the VPN proxy but never both - and FlareSolverr's first request went out
+    # from the home address. In here every request has no other way out.
+    # gluetun's DNS cannot resolve compose names, so Prowlarr reaches Sonarr and
+    # Radarr on the host address (Settings -> Apps); they still reach it as
+    # prowlarr:9696 through gluetun's network alias.
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
     environment:
       PUID: "${PUID}"
       PGID: "${PGID}"
       TZ: "${TZ}"
     volumes:
       - ./prowlarr/config:/config
-    ports:
-      - "9696:9696"
 
-  # WireGuard tunnel that qBittorrent lives inside. Nothing else routes through
-  # it - Jellyfin, Nextcloud and the *arr apps keep the normal connection.
+  # WireGuard tunnel that qBittorrent, Prowlarr and FlareSolverr live inside.
+  # Nothing else routes through it - Jellyfin, Nextcloud and the other *arr
+  # apps keep the normal connection.
   gluetun:
     container_name: gluetun
     mem_limit: 256m
@@ -428,9 +437,17 @@ services:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
-    # qBittorrent has no network of its own, so its ports are published here
+    # qBittorrent and Prowlarr have no network of their own, so their ports are
+    # published here, and the aliases keep prowlarr:9696 and flaresolverr:8191
+    # resolving for Sonarr, Radarr, Homarr and Uptime Kuma.
     ports:
       - "8083:8083"
+      - "9696:9696"
+    networks:
+      default:
+        aliases:
+          - prowlarr
+          - flaresolverr
     environment:
       TZ: "${TZ}"
       # "custom" rather than "protonvpn" on purpose. With the protonvpn
@@ -525,10 +542,14 @@ services:
     mem_limit: 1g
     image: ghcr.io/flaresolverr/flaresolverr:latest
     restart: unless-stopped
+    # Solves challenges from the VPN address, same as the Prowlarr request it
+    # serves. Prowlarr reaches it as localhost:8191, Uptime Kuma as
+    # flaresolverr:8191 through gluetun's alias.
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
     environment:
       TZ: "${TZ}"
-    ports:
-      - "8191:8191"
 
   jellyseerr:
     container_name: jellyseerr
