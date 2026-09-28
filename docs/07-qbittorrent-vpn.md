@@ -343,6 +343,23 @@ asked to fix the wifi again.
 Proper QoS on the router (fq_codel, cake) solves bufferbloat without giving up
 throughput, but it needs a router that supports it. The cap costs one command.
 
+The bandwidth cap is the limit, so the queue does not also need to be one.
+qBittorrent's default of 3 active downloads, with dead torrents counted, let
+three torrents with no seeders hold every slot while 95 others waited, at
+0 B/s, until decluttarr removed them half an hour apiece. Old back-catalogue
+episodes are mostly like that. Let more run and stop counting the dead ones:
+
+```bash
+docker exec gluetun wget -qO- --post-data='json={"dont_count_slow_torrents":true,"max_active_downloads":6,"max_active_torrents":10}' \
+  http://127.0.0.1:8083/api/v2/app/setPreferences
+```
+
+For the same back catalogue, prefer a season pack to single episodes. Sonarr
+never picks one on its own when any episode of the season is already on disk
+(the pack is rejected as "Existing file meets cutoff" for those), so it grabs
+single episodes whose swarms died years ago. Grab the pack from Interactive
+Search instead: Sonarr imports the missing episodes and leaves the rest.
+
 ---
 
 [← Phase 6: Push notifications when a download finishes](06-push-notifications.md) · [All phases](README.md) · [Phase 8: Stop the server transcoding: prefer H.264 at grab time →](08-prefer-h264.md)

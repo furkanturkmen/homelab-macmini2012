@@ -467,8 +467,20 @@ services:
       # gluetun defaults to DNS-over-TLS via Cloudflare, which Proton resets -
       # so every lookup fails, the healthcheck fails, and it restart-loops even
       # though the tunnel itself is fine. Use the resolver from Proton's config.
-      DOT: "off"
-      DNS_ADDRESS: "10.2.0.1"
+      #
+      # As gluetun's upstream, not as the namespace's resolver: the old
+      # DNS_ADDRESS=10.2.0.1 wrote Proton straight into resolv.conf and skipped
+      # gluetun's caching server. With Prowlarr in here, one search fires dozens
+      # of uncached lookups over the tunnel, a burst of them failed together,
+      # and Prowlarr disabled every indexer at once. Now they hit 127.0.0.1.
+      # gluetun warns to add 10.2.0.1 to FIREWALL_OUTBOUND_SUBNETS: do not.
+      # It is Proton's resolver inside the tunnel, and that list is for
+      # addresses reached outside it.
+      DNS_UPSTREAM_RESOLVER_TYPE: "plain"
+      DNS_UPSTREAM_PLAIN_ADDRESSES: "10.2.0.1:53"
+      # Was never in effect while resolv.conf bypassed gluetun's server; kept
+      # off so moving to that server does not start blocking torrent sites.
+      BLOCK_MALICIOUS: "off"
       # Give the tunnel room to settle before the healthcheck starts killing
       # and restarting it - a 10s loop makes every failure look identical and
       # leaves no window to diagnose anything.
