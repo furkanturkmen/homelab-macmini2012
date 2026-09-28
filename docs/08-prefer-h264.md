@@ -183,6 +183,15 @@ minimum custom format score is `0` rather than the `−100` from Step 8.2, so
 HEVC and AV1 films are refused outright rather than ranked low. That is stricter
 than this phase intends, and it is left as is until a film goes missing for it.
 
+One exception since: shows that never had an HD release. Drake & Josh only
+exists as SDTV and DVD rips, so under a 720p floor it can never be found, and
+its Seerr request just sits there with no status. Sonarr has a second profile,
+**"Old shows – SD allowed"**: the same groups, scores and 1080p cutoff, plus
+SDTV, WEB 480p, DVD, Bluray-480p and Bluray-576p. It is a floor, not a
+preference: an HD release still wins when one exists, and upgrades stay on.
+Assign it per series in Sonarr (Drake & Josh, Galactik Football), and leave
+Seerr's default where it is, so new requests keep the 1080p profile.
+
 ---
 
 [← Phase 7: Route qBittorrent through a VPN](07-qbittorrent-vpn.md) · [All phases](README.md) · [Phase 9: Catch a torrent that is not what it claims to be →](09-torrent-guard.md)
