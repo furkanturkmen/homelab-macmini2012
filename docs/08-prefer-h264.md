@@ -192,6 +192,14 @@ preference: an HD release still wins when one exists, and upgrades stay on.
 Assign it per series in Sonarr (Drake & Josh, Galactik Football), and leave
 Seerr's default where it is, so new requests keep the 1080p profile.
 
+The Neighborhood is on it too, for a different reason: it aired in HD, but
+several season 1 episodes have no HD copy left that anyone seeds. Expect less
+from the switch than it suggests. Sonarr still ranks HD above SD, so an
+automatic search keeps picking a dead HD release while a live SD one exists;
+the SD copy has to be grabbed from Interactive Search. Indexer seeder counts
+are no guide either - eztv listed 137-183 for SD copies that had no reachable
+peer at all.
+
 ---
 
 [← Phase 7: Route qBittorrent through a VPN](07-qbittorrent-vpn.md) · [All phases](README.md) · [Phase 9: Catch a torrent that is not what it claims to be →](09-torrent-guard.md)
