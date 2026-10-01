@@ -67,7 +67,11 @@ services:
     # domain the household looks up crosses the ISP line in plain text.
     # Pi-hole is pointed here at runtime; pihole.toml is gitignored, so the
     # setting is recorded here:
-    #   pihole-FTL --config dns.upstreams '["<HOST_LAN_IP>#5053"]'
+    #   pihole-FTL --config dns.upstreams '["172.18.0.7#5053"]'
+    # (dnscrypt-proxy's IP on homelab_default; re-check with docker inspect if it
+    # is recreated.) The old target, <HOST_LAN_IP>#5053, hairpins through the
+    # published port and stopped answering from inside the pihole container on
+    # 2026-10-01, taking DNS down house-wide.
     # Rollback to plain DNS:
     #   pihole-FTL --config dns.upstreams '["8.8.8.8","8.8.4.4"]'
     # Published on the LAN IP rather than joined to pihole's namespace, so a
