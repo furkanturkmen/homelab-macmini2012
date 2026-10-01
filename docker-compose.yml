@@ -51,6 +51,10 @@ services:
     volumes:
       - ./pihole/etc:/etc/pihole
       - ./pihole/dnsmasq:/etc/dnsmasq.d
+    # On the dns network too, to reach dnscrypt-proxy at its fixed address.
+    networks:
+      - default
+      - dns
     cap_add:
       - NET_ADMIN
 
@@ -67,15 +71,19 @@ services:
     # domain the household looks up crosses the ISP line in plain text.
     # Pi-hole is pointed here at runtime; pihole.toml is gitignored, so the
     # setting is recorded here:
-    #   pihole-FTL --config dns.upstreams '["172.18.0.7#5053"]'
-    # (dnscrypt-proxy's IP on homelab_default; re-check with docker inspect if it
-    # is recreated.) The old target, <HOST_LAN_IP>#5053, hairpins through the
-    # published port and stopped answering from inside the pihole container on
-    # 2026-10-01, taking DNS down house-wide.
+    #   pihole-FTL --config dns.upstreams '["172.31.53.53#5053"]'
     # Rollback to plain DNS:
     #   pihole-FTL --config dns.upstreams '["8.8.8.8","8.8.4.4"]'
-    # Published on the LAN IP rather than joined to pihole's namespace, so a
-    # pihole recreate cannot leave this container on a dead network.
+    # 2026-10-01: pihole used to reach this through <HOST_LAN_IP>#5053, a hairpin
+    # out through the published port and back in. It stopped answering from
+    # inside the pihole container around 04:00 and DNS went down house-wide. The
+    # fixed address on the dns network (bottom of this file) is container to
+    # container and survives a recreate of either side. The LAN publish stays
+    # for anything else on the network that wants encrypted DNS directly.
+    networks:
+      default:
+      dns:
+        ipv4_address: 172.31.53.53
     user: "${PUID}:${PGID}"
     ports:
       - "${HOST_LAN_IP}:5053:5053/udp"
@@ -787,3 +795,10 @@ networks:
     ipam:
       config:
         - subnet: 172.31.77.0/24
+  # pihole -> dnscrypt-proxy. A subnet of its own so dnscrypt-proxy can hold a
+  # fixed address; pihole's upstream is an IP (dnsmasq takes no hostnames), and
+  # the default network has no configured subnet to pin one in.
+  dns:
+    ipam:
+      config:
+        - subnet: 172.31.53.0/24
