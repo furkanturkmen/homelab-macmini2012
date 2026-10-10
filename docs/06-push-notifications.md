@@ -195,6 +195,18 @@ removes that requirement.
 | Import stuck | either | `Needs a hand: …` with the reason and what to do |
 | Fake download removed | torrent guard ([Phase 9](09-torrent-guard.md)) | `Fake download removed: Ted Lasso S4E10` |
 | Request approved / declined / failed | Seerr | request title |
+| Request still not here | jellylab-push (`stale.mjs`) | `Still not here after 18 days: I Adore You (2015)` with why |
+
+The last one is sent once per request, when a title has been downloadable for
+14 days (`STALE_DAYS`) and still has not arrived: counted from the later of the
+request and the release (digital or disc for a film, the oldest missing
+episode's air date for a series), so a film still in cinemas is never "late".
+Seerr cannot decline a request once it is approved, so the request stays open,
+nothing is unmonitored or blocklisted, and Radarr or Sonarr go on looking. The
+reason comes from the background release check: no copy at all, only worse
+qualities, copies nobody shares, a download stuck at 0%, or good copies that
+simply were never grabbed (a search fixes that one). `GET /stale` on port 8099
+shows the list and the wording without sending anything.
 
 ---
 
