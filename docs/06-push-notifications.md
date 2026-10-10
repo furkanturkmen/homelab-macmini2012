@@ -71,18 +71,39 @@ curl -s -o /dev/null -w "read    %{http_code}\n" "http://localhost:8095/$NTFY_TO
 ## Step 6.3 — Radarr and Sonarr
 
 Both run a small script on import. It lives in the app's own config directory,
-which is gitignored, and reaches ntfy over the compose network rather than the
-LAN — see `radarr/config/ntfy.sh` and `sonarr/config/ntfy.sh` on the server.
+which is gitignored because it holds the ntfy password — see
+`radarr/config/ntfy.sh` and `sonarr/config/ntfy.sh` on the server.
+
+The script does not word the message itself. It hands the event to
+`jellylab-push` (`POST /notify/arr`, Docker network only), and
+`jellylab-push/notify.mjs` decides what to say:
+
+- **Episodes are bundled per series.** One push once the series has been quiet
+  for 5 minutes (at most 30 minutes after the first), with the numbers as
+  ranges: *Black Clover: 31 new episodes — Season 1: episodes 30–43, 54–76*.
+  One per episode meant 115 pushes for one anime in a day.
+- **A film** goes out at once: *New film: Dune (2021)*.
+- **A stuck import** says why. The script is not told the reason, so
+  jellylab-push reads it off the queue row and translates it: *Needs a hand:
+  The Voyage of the Dawn Treader (2010) — the release has a different name than
+  the title it was grabbed for*. It also says not to delete the torrent yet,
+  because deleting it removes the queue entry and the file is then left
+  stranded in `downloads/`.
+
+If jellylab-push does not answer, the script posts a plain message to ntfy
+itself, so a broken jellylab-push costs wording, never the message.
 
 Wire it up in each app: **Settings → Connect → + → Custom Script**
 
 - **Path:** `/config/ntfy.sh`
-- Tick **On Import** and **On Upgrade**, leave the rest off
+- Tick **On Import**, **On Upgrade**, **On Health Issue** and **On Manual
+  Interaction Required**, leave the rest off. The last one is the "import
+  stuck" alert. Radarr went without it until 2026-10-11, which is how a film
+  sat unimported for two days without anyone hearing.
 - **Test**, then Save
 
 Custom Script rather than the Webhook connection on purpose: webhook posts raw
-JSON, which arrives as a wall of braces. The script formats a readable line
-using the `radarr_*` / `sonarr_*` environment variables the app sets.
+JSON, which arrives as a wall of braces.
 
 ## Step 6.4 — Seerr
 
@@ -133,6 +154,12 @@ Prefer a **Keyword** check over a plain status check wherever the service
 returns something meaningful: a process can answer 200 while being useless, and
 `"ok":true` is the difference between "listening" and "working".
 
+Set **Retries** to 2 on every HTTP monitor (Kuma's default is 0). With 0, one
+failed check is an alert, and Bazarr alone sent 17 down/up pairs in a day for
+blips that lasted a minute. With 2, a service has to fail three checks in a row
+(about three minutes) before you hear about it, which still catches every real
+outage.
+
 > **The blind spot:** these alerts travel through ntfy. If ntfy itself dies, the
 > alarm about ntfy cannot reach you — a monitor on it turns the status page red
 > and nothing else. Two mitigations, both optional: a second notification
@@ -162,9 +189,11 @@ removes that requirement.
 
 | Event | Source | Example |
 |-------|--------|---------|
-| Movie imported | Radarr | `Movie added — Dune Part Two (2024), Bluray-1080p` |
-| Episode imported | Sonarr | `Episode added — Frieren S01E12, WEBDL-1080p` |
-| Quality upgrade | either | same, reading `upgraded` |
+| Movie imported | Radarr | `New film: Dune Part Two (2024)` · Bluray-1080p |
+| Episodes imported | Sonarr | `Frieren: 12 new episodes` · Season 1: episodes 1–12 |
+| Quality upgrade | either | `Better copy: …` |
+| Import stuck | either | `Needs a hand: …` with the reason and what to do |
+| Fake download removed | torrent guard ([Phase 9](09-torrent-guard.md)) | `Fake download removed: Ted Lasso S4E10` |
 | Request approved / declined / failed | Seerr | request title |
 
 ---

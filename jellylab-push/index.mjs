@@ -34,6 +34,10 @@
  * the app's configured URL all refer to it; the bridge is recoverable from git
  * if a paid account ever makes it worth having.
  *
+ * What it does do for notifications is word them: Sonarr and Radarr hand their
+ * import events here and notify.mjs turns thirty "Episode added" pushes into
+ * one, and a stuck import into a sentence saying why.
+ *
  * No npm dependencies on purpose — this is a stock node image with the file
  * mounted in. Nothing to build, nothing to keep patched.
  */
@@ -42,6 +46,7 @@ import { createServer } from 'node:http';
 import { statfs, readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 
 import * as filters from './filters.mjs';
+import * as notify from './notify.mjs';
 
 const {
   PUSH_PORT = '8099',
@@ -1191,6 +1196,28 @@ const server = createServer(async (req, res) => {
   }
 
   /**
+   * An event from Sonarr's or Radarr's Custom Script (their config/ntfy.sh),
+   * turned into a readable push by notify.mjs.
+   *
+   * Only from the Docker network, where both apps live. Anything that can post
+   * here can put words on everyone's phone, so a device on the LAN cannot,
+   * and a relay visitor never gets this far (POST is refused above).
+   */
+  if (url.pathname === '/notify/arr' && req.method === 'POST') {
+    if (!inside(internalNets, req.socket.remoteAddress)) {
+      return send(res, 403, { error: 'only from the docker network' });
+    }
+    try {
+      const form = new URLSearchParams(await readText(req, 64_000));
+      const vars = Object.fromEntries([...form].map(([k, v]) => [k.toLowerCase(), v]));
+      return send(res, 200, await notify.handleArrEvent(vars));
+    } catch (err) {
+      log(`notify failed: ${err.message}`);
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
+  /**
    * Make Jellyfin match the filter store now, rather than at the next tick.
    *
    * The store (content-filters.json) is the only place a filter is decided.
@@ -1467,6 +1494,14 @@ const server = createServer(async (req, res) => {
 
 await loadVerdicts();
 server.listen(Number(PUSH_PORT), () => log(`listening on :${PUSH_PORT}`));
+
+// Episodes still being gathered into one push would otherwise vanish with the
+// container. Docker sends SIGTERM and waits ten seconds; that is plenty.
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.once(sig, () => {
+    notify.flushAll().finally(() => process.exit(0));
+  });
+}
 
 /*
  * One title every five minutes, forever.
