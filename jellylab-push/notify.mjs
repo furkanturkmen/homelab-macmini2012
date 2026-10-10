@@ -46,7 +46,7 @@ const MAX_MS = Number(process.env.NOTIFY_MAX_MS) || 30 * 60 * 1000;
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
 /** Post one message to ntfy. Swallows failure: a lost push is not worth a crash. */
-async function publish({ title, body, tags, priority = 'default' }) {
+export async function publish({ title, body, tags, priority = 'default' }) {
   if (!NTFY_TOPIC) return;
   const headers = { Title: encodeHeader(title), Tags: tags, Priority: priority };
   if (NTFY_USER) headers.Authorization = `Basic ${Buffer.from(`${NTFY_USER}:${NTFY_PASSWORD}`).toString('base64')}`;
