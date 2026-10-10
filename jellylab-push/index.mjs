@@ -47,6 +47,7 @@ import { statfs, readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 
 import * as filters from './filters.mjs';
 import * as notify from './notify.mjs';
+import * as stale from './stale.mjs';
 
 const {
   PUSH_PORT = '8099',
@@ -739,6 +740,7 @@ async function sweepOne() {
       at: Date.now(),
       found: out.found,
       accepted: out.accepted,
+      bestSeeders: out.bestSeeders,
       rejections: out.rejections,
     });
     log(`swept ${stalest.type}:${stalest.tmdbId} found=${out.found} accepted=${out.accepted}`);
@@ -854,6 +856,9 @@ async function candidates(base, key, query, limit = 10) {
   return {
     found: all.length,
     accepted: accepted.length,
+    // Tracker-reported, so it can be stale, but it is the difference between
+    // "copies exist and nothing grabbed one" and "nobody is sharing it".
+    bestSeeders: Math.max(0, ...accepted.map(r => r.seeders ?? 0)),
     releases: accepted
       // Score first because that is what the profile actually wants, seeders
       // second because between two equally wanted releases the one people are
@@ -1376,6 +1381,18 @@ const server = createServer(async (req, res) => {
    * searches a season or an episode, never a whole series - and the app has
    * one, because a Jellyseerr request is made per season.
    */
+  /**
+   * The late requests and what their push says, without sending anything.
+   * For checking the wording, and for the day the app wants to show it.
+   */
+  if (url.pathname === '/stale' && req.method === 'GET') {
+    try {
+      return send(res, 200, await stale.check({ ...(await staleInputs()), send: false }));
+    } catch (err) {
+      return send(res, 502, { error: err.message });
+    }
+  }
+
   if (url.pathname === '/candidates') {
     const tmdbId = url.searchParams.get('tmdbId');
     const type = url.searchParams.get('type') === 'tv' ? 'tv' : 'movie';
@@ -1520,6 +1537,37 @@ for (const sig of ['SIGTERM', 'SIGINT']) {
 const SWEEP_MS = Number(process.env.SWEEP_MS) || 5 * 60 * 1000;
 setInterval(sweepOne, SWEEP_MS).unref();
 setTimeout(sweepOne, 10000).unref();
+
+/*
+ * Requests going nowhere (stale.mjs), told once each. It reads what the sweep
+ * above already learned rather than searching anything itself, so it adds no
+ * load on the indexers at all.
+ */
+async function staleInputs() {
+  const live = await qbitLive().catch(() => ({}));
+  const downloads = {};
+  const add = (type, map) => {
+    for (const [tmdbId, d] of Object.entries(map)) downloads[`${type}:${tmdbId}`] = d;
+  };
+  add('movie', await wholeQueue(RADARR_URL, RADARR_API_KEY, 'includeMovie=true')
+    .then(r => byTmdbId(r, x => x.movie, live)).catch(() => ({})));
+  add('tv', await wholeQueue(SONARR_URL, SONARR_API_KEY, 'includeSeries=true')
+    .then(r => byTmdbId(r, x => x.series, live)).catch(() => ({})));
+  return { downloads, verdictFor: (key) => VERDICTS.get(key) ?? null };
+}
+
+async function staleTick() {
+  try {
+    await stale.check({ ...(await staleInputs()), send: true });
+  } catch (err) {
+    log(`stale check failed: ${err.message}`);
+  }
+}
+
+const STALE_MS = Number(process.env.STALE_MS) || 60 * 60 * 1000;
+setInterval(staleTick, STALE_MS).unref();
+// After the first sweep has had a chance to refresh a verdict or two.
+setTimeout(staleTick, 3 * 60 * 1000).unref();
 
 /*
  * Apply the content filters on a timer.
