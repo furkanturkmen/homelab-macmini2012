@@ -90,6 +90,11 @@ def notify(title, body, priority='high', tags='warning'):
     topic, user, pw = env('NTFY_TOPIC'), env('NTFY_USER'), env('NTFY_PASSWORD')
     if not topic:
         return
+    # Headers are Latin-1; a series name outside ASCII goes as an RFC 2047
+    # encoded-word, which ntfy decodes.
+    if not title.isascii():
+        import base64
+        title = f'=?UTF-8?B?{base64.b64encode(title.encode()).decode()}?='
     req = urllib.request.Request(
         f'http://localhost:8095/{topic}',
         data=body.encode(),
@@ -133,24 +138,27 @@ def remove_and_blocklist(h, dry):
     one downloadId. All of them go together, or the leftovers sit in the queue
     pointing at a torrent that no longer exists.
 
-    Returns a sentence describing what happened, for the notification.
+    Returns (what happened, what it was for), both in plain words for the
+    notification; the second is None when no queue row says.
     """
     for name, base, keyvar in ARRS:
         key = env(keyvar)
         if not key:
             continue
         try:
-            queue = arr(base, key, 'queue?pageSize=500')
+            queue = arr(base, key, 'queue?pageSize=500&includeSeries=true&includeEpisode=true&includeMovie=true')
             rows = [r for r in (queue or {}).get('records', [])
                     if (r.get('downloadId') or '').lower() == h.lower()]
             if not rows:
                 continue
+            what = wanted_for(rows)
             if dry:
-                return f'would blocklist via {name} ({len(rows)} queue row(s))'
+                return f'Would be deleted and blocked in {name.capitalize()} (dry run).', what
             arr(base, key,
                 'queue/bulk?removeFromClient=true&blocklist=true&skipRedownload=false',
                 method='DELETE', body={'ids': [r['id'] for r in rows]})
-            return f'blocklisted via {name} ({len(rows)} queue row(s)), re-searching'
+            return ('Deleted and blocked, and a search for a real copy has started. '
+                    'Nothing to do.'), what
         except Exception as e:
             print(f'{name} blocklist failed: {e}', file=sys.stderr)
 
@@ -158,10 +166,28 @@ def remove_and_blocklist(h, dry):
     # anyway - the file is hostile either way - but be explicit that nothing
     # was taught, because this is the case that can loop.
     if dry:
-        return 'would delete from qBittorrent only (no queue row - NOT blocklisted)'
+        return 'Would be deleted from qBittorrent only (dry run).', None
     qb('/api/v2/torrents/stop', f'hashes={h}')
     qb('/api/v2/torrents/delete', f'hashes={h}&deleteFiles=true')
-    return 'deleted from qBittorrent only - NOT blocklisted, may be re-grabbed'
+    return ('Deleted, but Sonarr/Radarr did not know this download, so it could '
+            'not be blocked and may be grabbed again.'), None
+
+
+def wanted_for(rows):
+    """'Ted Lasso S4E10' or 'Dune (2021)' from queue rows, for a title a person can read."""
+    r = rows[0]
+    if r.get('series'):
+        eps = sorted({(x.get('episode') or {}).get('episodeNumber') for x in rows} - {None})
+        season = (r.get('episode') or {}).get('seasonNumber', r.get('seasonNumber'))
+        if len(eps) == 1:
+            return f"{r['series']['title']} S{season}E{eps[0]}"
+        if eps:
+            return f"{r['series']['title']} season {season} ({len(eps)} episodes)"
+        return r['series']['title']
+    if r.get('movie'):
+        m = r['movie']
+        return f"{m['title']} ({m['year']})" if m.get('year') else m['title']
+    return None
 
 
 def load_seen():
@@ -207,29 +233,30 @@ def main():
         arr = (t.get('category') or '') in ARR_CATEGORIES
 
         if hostile and arr:
-            biggest = max(files, key=lambda f: f.get('size', 0))
-            detail = (
-                f"{name[:70]}\n"
-                f"contains: {', '.join(hostile)}\n"
-                f"largest file: {biggest['name'][:60]} "
-                f"({biggest.get('size', 0) / 2**20:.0f} MiB)\n"
-                f"progress was {t.get('progress', 0) * 100:.0f}%"
-            )
             print(f'REMOVE {h} {name[:60]} -> {hostile}')
-            via = remove_and_blocklist(h, dry)
-            print(f'       {via}')
-            removed.append(f'{detail}\n{via}')
+            outcome, what = remove_and_blocklist(h, dry)
+            print(f'       {outcome}')
+            body = (
+                f"The download was a disguised program ({', '.join(hostile)}), not a video. "
+                f"Nothing was opened, so nothing was harmed.\n"
+                f"{outcome}\n"
+                f"Release: {name}"
+            )
+            removed.append((what or name, body))
 
         elif arr and not has_media and h not in seen:
             # Reported only. Split archives are legitimate and look like this.
             print(f'FLAG   {h} {name[:60]} -> no media extension')
-            flagged.append(f"{name[:70]}\nno video file in {len(files)} file(s) - check it")
+            flagged.append((name, (
+                f"There is no video file among its {len(files)} file(s). "
+                f"Usually a packed archive, which is fine, but it can be junk. "
+                f"Worth a look in qBittorrent.")))
             seen.add(h)
 
-    for d in removed:
-        notify('Malware torrent removed', d, priority='urgent', tags='rotating_light')
-    for d in flagged:
-        notify('Torrent has no video file', d, priority='default', tags='mag')
+    for what, body in removed:
+        notify(f'Fake download removed: {what}', body, priority='urgent', tags='rotating_light')
+    for what, body in flagged:
+        notify(f'Check this download: {what}', body, priority='default', tags='mag')
 
     save_seen(seen & live)
     if not removed and not flagged:
