@@ -647,30 +647,6 @@ services:
       - jellyseerr
 
   # =========================================================
-  # GAME SERVER
-  # =========================================================
-
-  sevendtd:
-    container_name: 7dtd
-    mem_limit: 4g
-    image: vinanrra/7dtd-server:latest
-    restart: unless-stopped
-    ports:
-      - "26900:26900/tcp"
-      - "26900:26900/udp"
-      - "26901:26901/udp"
-      - "26902:26902/udp"
-    environment:
-      START_MODE: "1"
-      VERSION: "stable"
-      TimeZone: "${TZ}"
-    volumes:
-      - ./7dtd/config:/home/sdtdserver/serverfiles
-      - ./7dtd/saves:/home/sdtdserver/.local/share/7DaysToDie
-      - ./7dtd/backups:/home/sdtdserver/lgsm/backup
-      - ./7dtd/logs:/home/sdtdserver/log
-
-  # =========================================================
   # NOTIFICATIONS
   # =========================================================
 

@@ -40,3 +40,7 @@ __pycache__/
 
 # whisper model cache - gigabytes, re-downloaded on demand
 whisper/
+
+# Personal services and backup paths that stay on the box (see docker-compose.override.yml)
+docker-compose.override.yml
+backup-extra.txt
