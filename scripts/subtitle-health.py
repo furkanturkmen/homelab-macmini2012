@@ -75,6 +75,9 @@ MAX_TRIES = 3           # blacklisted this often for one title and language: sto
 # tracks pasted together or karaoke syllables (JUJUTSU KAISEN, 2026-11-10).
 OVERLAP_S = 0.5
 TANGLED = 0.3
+# Only where subtitle-overlap.py works too (anime by default).
+OVERLAP_DIRS = tuple(os.path.join(MEDIA, d.strip()) + '/' for d in
+                     setting('SUBTITLE_OVERLAP_DIRS', 'anime').split(',') if d.strip())
 
 
 def env(key):
@@ -123,7 +126,7 @@ def cues(path):
     return sorted(out)
 
 
-def judge(c, runtime, kind):
+def judge(c, runtime, kind, overlap_dir=False):
     if not c:
         return ['empty']
     problems = []
@@ -142,7 +145,7 @@ def judge(c, runtime, kind):
     if runtime - last > HOLE_S[kind]:
         problems.append(f'truncated, ends at {last / 60:.1f} of {runtime / 60:.1f}min')
     tangled = sum(1 for (_, e), (a, _) in zip(c, c[1:]) if e - a > OVERLAP_S)
-    if tangled > TANGLED * len(c):
+    if overlap_dir and tangled > TANGLED * len(c):
         problems.append(f'tangled, {tangled} of {len(c)} lines overlap')
     per_min = len(c) / (runtime / 60)
     if per_min < MIN_PER_MIN:
@@ -164,7 +167,7 @@ def scan():
             if not (n.startswith(stem + '.') and SIDECAR.search(n)):
                 continue
             path = os.path.join(d, n)
-            problems = judge(cues(path), runtime, kind)
+            problems = judge(cues(path), runtime, kind, path.startswith(OVERLAP_DIRS))
             if problems:
                 yield video, path, kind, problems
 
