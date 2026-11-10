@@ -58,9 +58,10 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 
-COMPOSE_DIR = '/home/furkan/homelab'
-ENV_FILE = f'{COMPOSE_DIR}/.env'
-STATE_FILE = '/home/furkan/homelab-scripts/.vpn-guard-state.json'
+COMPOSE_DIR = os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab'))
+STATE_DIR = os.path.expanduser(os.environ.get('HOMELAB_STATE_DIR', '~/homelab-scripts'))
+ENV_FILE = os.path.join(COMPOSE_DIR, '.env')
+STATE_FILE = os.path.join(STATE_DIR, '.vpn-guard-state.json')
 VPN = 'gluetun'
 QBIT = 'qbittorrent'
 NAMESPACE_PEERS = ('prowlarr', 'flaresolverr')  # also inside gluetun's namespace
@@ -158,6 +159,29 @@ def save_state(state):
     os.replace(tmp, STATE_FILE)
 
 
+SILENT = 'the VPN server answers nothing'
+
+
+def server_silent():
+    """True when packets go into the tunnel and nothing ever comes back.
+
+    That is a Proton server that is down, full or retired - not something a
+    restart can fix, because the restart dials the same server. Only counted
+    while the host itself still reaches the internet, so a home outage is not
+    blamed on Proton.
+    """
+    _, dev = in_vpn('cat', '/proc/net/dev')
+    for line in dev.splitlines():
+        name, _, rest = line.partition(':')
+        if name.strip() == 'tun0':
+            f = rest.split()
+            rx, tx = int(f[0]), int(f[8])
+            if tx > 0 and rx == 0:
+                _, host_trace = sh('curl', '-s', '-m', '10', TRACE)
+                return bool(trace_ip(host_trace))
+    return False
+
+
 def check():
     """What is wrong, as a list of short reasons, plus the facts behind them."""
     facts, problems = {}, []
@@ -169,6 +193,9 @@ def check():
     facts['gluetun'] = inspect(VPN, '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{end}}')
     if facts['gluetun'] != 'running/healthy':
         problems.append(f"gluetun is {facts['gluetun'] or 'missing'}")
+        if server_silent():
+            facts['endpoint'] = env('VPN_ENDPOINT_IP')
+            problems.append(SILENT)
         return facts, problems
 
     _, host_trace = sh('curl', '-s', '-m', '10', TRACE)
@@ -265,6 +292,7 @@ def main():
         else:
             log(f'ok ({summary})')
         state['strikes'] = 0
+        state.pop('silent_notified', None)
         save_state(state)
         return
 
@@ -280,6 +308,22 @@ def main():
     state['strikes'] = state.get('strikes', 0) + 1
     if state['strikes'] < 2:
         log(f'strike 1, looking again next run: {", ".join(problems)} ({summary})')
+        save_state(state)
+        return
+
+    # Restarting dials the same dead server again; say what will fix it instead.
+    if SILENT in problems:
+        log(f'not repairing, a restart cannot fix this: {", ".join(problems)} ({summary})')
+        if DRY:
+            return
+        if not state.get('silent_notified'):
+            notify('VPN guard: the VPN server stopped answering',
+                   f"Proton server {facts.get('endpoint') or '(see VPN_ENDPOINT_IP)'} takes no traffic. "
+                   'Downloads and indexer searches are paused; nothing leaks. Restarting will not help: '
+                   'download a new WireGuard config for another server (NAT-PMP on) and run '
+                   'scripts/vpn-swap-config.sh with it. See docs/07-qbittorrent-vpn.md.',
+                   priority='high', tags='warning')
+            state['silent_notified'] = True
         save_state(state)
         return
 
