@@ -22,8 +22,30 @@ import os
 import re
 import subprocess
 
+HOMELAB_DIR = os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab'))
+STATE_DIR = os.path.expanduser(os.environ.get('HOMELAB_STATE_DIR', '~/homelab-scripts'))
+
+
+def setting(name, default=None):
+    """From the environment, else the stack's .env, else the default."""
+    value = os.environ.get(name)
+    if not value:
+        try:
+            with open(os.path.join(HOMELAB_DIR, '.env')) as f:
+                for line in f:
+                    if line.startswith(f'{name}='):
+                        value = line.split('=', 1)[1].strip().strip('"\'')
+        except OSError:
+            pass
+    if value:
+        return value
+    if default is None:
+        raise SystemExit(f'{name} is not set: add it to {HOMELAB_DIR}/.env')
+    return default
+
+
 ROOTS = ('movies', 'tv', 'anime')
-MEDIA = '/mnt/storage/media'
+MEDIA = setting('MEDIA_ROOT').rstrip('/')
 IN_CONTAINER = '/media'
 VIDEO = ('.mkv', '.mp4', '.avi', '.m4v')
 SIDECAR = re.compile(r'\.([a-z]{2,3})(?:\.(?:hi|forced|sdh))?\.(?:srt|ass|ssa|sub)$', re.I)
@@ -32,7 +54,7 @@ SIDECAR = re.compile(r'\.([a-z]{2,3})(?:\.(?:hi|forced|sdh))?\.(?:srt|ass|ssa|su
 NORM = {'eng': 'en', 'nld': 'nl', 'dut': 'nl', 'tur': 'tr', 'jpn': 'ja',
         'zho': 'zh', 'chi': 'zh', 'spa': 'es', 'por': 'pt', 'ger': 'de',
         'deu': 'de', 'fre': 'fr', 'fra': 'fr', 'ita': 'it'}
-WANT = ('en', 'nl', 'tr')
+WANT = tuple(c.strip() for c in setting('SUBTITLE_LANGS', 'en').split(',') if c.strip())
 
 
 def norm(code):

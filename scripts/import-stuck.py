@@ -39,9 +39,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-HOST = os.environ.get('ARR_HOST', '192.168.68.59')
+HOST = os.environ.get('ARR_HOST', '127.0.0.1')  # the *arr ports are published on the host
 BASE = f'http://{HOST}:8989'
-ENV = os.path.expanduser('~/homelab/.env')
+ENV = os.path.join(os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab')), '.env')
 
 # The states Sonarr uses for "finished downloading, not filed away".
 STUCK = {'importBlocked', 'importPending', 'importFailed'}

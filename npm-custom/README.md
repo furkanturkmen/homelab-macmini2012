@@ -108,12 +108,22 @@ curl -sI https://jellyseerr.yourdomain.tld/apps/$S/source.json | head -1  # 404
 
 ## Install
 
+Both files are templates. The names in `${...}` come from `.env`:
+
+| Variable | Example | Used for |
+|---|---|---|
+| `LAN_DOMAIN` | `homelab` | `jellyseerr.<LAN_DOMAIN>.internal` / `.lan` |
+| `PUBLIC_JELLYFIN_HOST` | `jellyfin.example.com` | the one host that serves `/apps/` |
+| `JELLYLAB_DEV_HOST` | `192.168.1.20` | optional: the laptop running `expo start --web` |
+| `JELLYLAB_DEV_PORT` | `8082` | optional: its port |
+
 ```bash
-docker exec npm mkdir -p /data/nginx/custom
-docker cp npm-custom/http.conf          npm:/data/nginx/custom/http.conf
-docker cp npm-custom/server_proxy.conf  npm:/data/nginx/custom/server_proxy.conf
-docker exec npm nginx -t && docker exec npm nginx -s reload
+npm-custom/install.sh --print   # see the rendered files, change nothing
+npm-custom/install.sh           # render, copy into npm, nginx -t, reload
 ```
+
+Only those four names are substituted; nginx's own `$host`, `$http_origin`
+and the rest are left alone.
 
 ## Verify
 

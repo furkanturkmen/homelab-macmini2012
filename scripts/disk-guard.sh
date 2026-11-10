@@ -4,10 +4,11 @@
 # which is real data loss - a stalled download is not.
 set -uo pipefail
 
-STOP_GB=40
-WARN_GB=80
-COMPOSE_DIR="$HOME/homelab"
-LOG="$HOME/homelab-scripts/disk-guard.log"
+STOP_GB="${STOP_GB:-40}"
+WARN_GB="${WARN_GB:-80}"
+COMPOSE_DIR="${HOMELAB_DIR:-$HOME/homelab}"
+STATE_DIR="${HOMELAB_STATE_DIR:-$HOME/homelab-scripts}"
+LOG="$STATE_DIR/disk-guard.log"
 
 log() { printf '%s  %s\n' "$(date '+%F %T')" "$1" >> "$LOG"; }
 
@@ -28,4 +29,4 @@ fi
 
 # Usage history, so a replacement drive can be sized from real numbers
 # instead of extrapolating a one-off import burst into a weekly rate.
-printf '%s,%s\n' "$(date '+%F %T')" "$free_gb" >> "$HOME/homelab-scripts/disk-usage.csv"
+printf '%s,%s\n' "$(date '+%F %T')" "$free_gb" >> "$STATE_DIR/disk-usage.csv"

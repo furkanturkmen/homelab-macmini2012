@@ -19,7 +19,7 @@ import sys
 import urllib.error
 import urllib.request
 
-HOST = os.environ.get('ARR_HOST', '192.168.68.59')
+HOST = os.environ.get('ARR_HOST', '127.0.0.1')  # the *arr ports are published on the host
 # Inside the containers; /media is the shared library mount.
 RECYCLE_BIN = os.environ.get('RECYCLE_BIN', '/media/.recyclebin')
 # R1: low enough that HEVC (-20) and AV1 (-25) stay last resorts rather
@@ -27,7 +27,7 @@ RECYCLE_BIN = os.environ.get('RECYCLE_BIN', '/media/.recyclebin')
 # Anime exists almost only in those codecs now; 0 made whole titles
 # unobtainable. The same value must be set in BOTH apps (R7).
 MIN_FORMAT_SCORE = int(os.environ.get('MIN_FORMAT_SCORE', '-25'))
-ENV = os.path.expanduser('~/homelab/.env')
+ENV = os.path.join(os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab')), '.env')
 
 # R8 and R9 used to live here - which qualities each profile allows, and the
 # archive profile reaching furthest down. They moved to quality-profiles.py,
