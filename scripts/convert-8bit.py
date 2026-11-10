@@ -12,8 +12,9 @@ Only the folders in CONVERT_8BIT_DIRS (comma-separated, relative to
 MEDIA_ROOT) are touched; empty means nothing is converted. Audio, subtitles
 and attached fonts are copied unchanged, so built-in subtitles stay in sync.
 The new file replaces the original only when it has the same tracks and
-length. While Jellyfin transcodes for someone the conversion is paused, so
-that playback keeps the CPU; the swap waits until nobody has the file open.
+length. It runs at low CPU priority and pauses when a live Jellyfin transcode
+falls below MIN_FPS, so playback stays smooth; the swap waits until nobody
+has the file open.
 
 Runs from cron, one file at a time. --dry-run only lists what it would do.
 """
@@ -57,6 +58,7 @@ LOCK = os.path.join(STATE_DIR, '.convert-8bit.lock')
 VIDEO = ('.mkv',)     # MP4 cannot carry the ASS subtitles and fonts the copy keeps
 MIN_AGE = 600          # leave files alone while they may still be written
 WORKER = 'convert-8bit'
+MIN_FPS = 30           # a live transcode slower than this gets the whole CPU
 
 
 def run(*args, timeout=120):
@@ -94,9 +96,16 @@ def sessions():
 
 
 def transcoding():
-    """True while Jellyfin converts something live: that needs the CPU.
+    """True while a live Jellyfin transcode runs too slowly to stay ahead of
+    playback. The conversion runs at a quarter of Jellyfin's CPU share, which
+    left a 1080p transcode at 65 fps; below MIN_FPS it gives way entirely.
     A device that plays the file itself costs the server next to nothing."""
-    return any((s.get('PlayState') or {}).get('PlayMethod') == 'Transcode' for s in sessions())
+    for s in sessions():
+        t = s.get('TranscodingInfo') or {}
+        if (s.get('PlayState') or {}).get('PlayMethod') == 'Transcode' and t.get('Framerate'):
+            if float(t['Framerate']) < MIN_FPS:
+                return True
+    return False
 
 
 def playing(path):
