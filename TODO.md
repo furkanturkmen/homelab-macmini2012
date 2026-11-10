@@ -28,10 +28,10 @@ Done and moved into the guide:
   of simultaneous user sessions). No remote bitrate cap on purpose: a cap
   forces a transcode of every file above it, and transcoding is exactly what
   an HD 4000 cannot afford.
-- **Seerr request quotas.** 10 movies and 5 series a week for the children,
-  20 and 10 for other adults, unlimited for the owner (Users → edit →
-  quotas). `enableSpecialEpisodes` off: specials are badly named at every
-  indexer and sat "searching" forever.
+- **Seerr requests.** `enableSpecialEpisodes` off: specials are badly named at
+  every indexer and sat "searching" forever. Request quotas stay unlimited and
+  are set by hand per person when needed (Users → edit → Movie/Series Request
+  Limit).
 - **Uptime Kuma history retention.** 60 days instead of 180 (Settings →
   Monitor History). After three months the database held 1.6 million
   heartbeats and 245 MB, all of it in the nightly backup.
