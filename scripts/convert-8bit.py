@@ -115,6 +115,9 @@ def playing(path):
 
 
 def candidates():
+    """Files to look at. The episodes right after one someone is watching come
+    first, in order, so the conversion stays ahead of the viewer."""
+    found = []
     for rel in DIRS:
         for d, dirs, files in os.walk(os.path.join(MEDIA, rel)):
             dirs[:] = [x for x in dirs if not x.startswith('.')]
@@ -122,7 +125,11 @@ def candidates():
                 if n.lower().endswith(VIDEO) and not n.startswith('.'):
                     p = os.path.join(d, n)
                     if os.stat(p).st_mtime < time.time() - MIN_AGE:
-                        yield p
+                        found.append(p)
+    found.sort()
+    now = sorted(s['NowPlayingItem'].get('Path', '').replace(IN_CONTAINER, MEDIA, 1) for s in sessions())
+    ahead = [p for p in found if any(os.path.dirname(p) == os.path.dirname(w) and p > w for w in now)]
+    return ahead + [p for p in found if p not in ahead]
 
 
 def convert(src, info):
