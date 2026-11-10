@@ -167,12 +167,39 @@ it stops qBittorrent at once.
 cp scripts/vpn-guard.py ~/homelab-scripts/ && chmod 755 ~/homelab-scripts/vpn-guard.py
 python3 ~/homelab-scripts/vpn-guard.py --dry-run    # reports, changes nothing
 crontab -e
-# */5 * * * * /usr/bin/python3 /home/furkan/homelab-scripts/vpn-guard.py >> /home/furkan/homelab-scripts/vpn-guard.log 2>&1
+# */5 * * * * /usr/bin/python3 $HOME/homelab-scripts/vpn-guard.py >> $HOME/homelab-scripts/vpn-guard.log 2>&1
 ```
 
-Paths in the script assume the user `furkan` and `~/homelab`; adjust them for
-yours. `--repair` runs the full restart once, whatever the state, to prove the
+The script finds the stack in `~/homelab` and keeps its state in
+`~/homelab-scripts`; set `HOMELAB_DIR` / `HOMELAB_STATE_DIR` if yours live
+elsewhere. `--repair` runs the full restart once, whatever the state, to prove the
 sequence on your machine. It took about 20 seconds here.
+
+### When the Proton server stops answering
+
+A Proton config names one server. If that server goes down, fills up or is
+retired, the tunnel sends packets and gets nothing back, gluetun loops on
+`lookup github.com: i/o timeout`, and no restart helps, because every restart
+dials the same server. The key itself can still be valid for a year.
+
+vpn-guard recognises this (bytes out of `tun0`, none in, while the host's own
+internet works). Instead of restarting, it sends one message: "the VPN server
+stopped answering". Nothing leaks in the meantime; qBittorrent, Prowlarr and
+FlareSolverr simply have no internet.
+
+The fix is a config for another server. Generate it as in Step 7.2 (GNU/Linux,
+NetShield off, NAT-PMP **on**, a P2P server with low load; use the per-server
+**Create** button, not the "best server" one at the top), then:
+
+```bash
+scp gluetun-nl-2-NL-463.conf homelab:~/proton.conf     # from the machine you downloaded it on
+~/homelab/scripts/vpn-swap-config.sh ~/proton.conf     # on the server
+```
+
+It backs up `.env`, writes the five WireGuard values, recreates gluetun and then
+recreates everything sharing its network. A plain `restart` of those fails with
+`joining network namespace of container: No such container` once gluetun is a new
+container. Finally it pushes the forwarded port and deletes the `.conf`.
 
 ## Step 7.7 — Indexer searches through the tunnel too
 
@@ -200,7 +227,7 @@ What the move needs, all in the compose file and Prowlarr's settings:
   using `prowlarr:9696` and `flaresolverr:8191` unchanged.
 - gluetun's DNS is Proton's resolver, which cannot resolve compose names. In
   Prowlarr, **Settings → Apps**, point Sonarr and Radarr at the host address
-  (`http://192.168.68.59:8989`, `:7878`). `FIREWALL_OUTBOUND_SUBNETS` already
+  (`http://<HOST_LAN_IP>:8989`, `:7878`). `FIREWALL_OUTBOUND_SUBNETS` already
   lets the LAN through.
 - **Settings → Indexers → Indexer Proxies**: FlareSolverr's host becomes
   `http://localhost:8191/`. Delete the old `gluetun:8888` Http proxy, because
