@@ -153,6 +153,40 @@ python3 ~/homelab-scripts/subtitle-extract.py --dry-run
 Releases with no English inside at all (ToonsHub AMZN "Japan" WEB-DLs carry
 only Japanese) still need a different release or a Bazarr sidecar.
 
+## Two subtitle lines drawn over each other
+
+Symptom: in an anime episode, a second line in italics is printed straight
+through the dialogue ("I knew it. Which" with "Villager: Lv 1" on top of it).
+Harem in the Labyrinth and Firefly Wedding, 2026-11-10.
+
+Anime subtitles are mostly converted from fansub or Crunchyroll ASS files,
+where a sign or status screen is translated at the top of the picture while
+the dialogue runs at the bottom. SRT has no position, so both lines land at
+the bottom at the same moment and the player draws them over each other.
+Two people speaking at once does the same. Half of the anime sidecars had it.
+
+`scripts/subtitle-overlap.py` runs from cron every 15 minutes (five minutes
+after `subtitle-extract.py`) over the folders in `SUBTITLE_OVERLAP_DIRS`
+(default `anime`) and rewrites every SRT with overlapping lines so that only
+one cue is on screen at a time:
+
+- an overlap under half a second ends the earlier line sooner
+- a real overlap becomes one cue with the lines stacked; no text is lost
+- karaoke left-overs (a lone `♪` or letter per cue) and lines repeated from a
+  second copy of the track are dropped
+- a file where many lines still overlap after that is a bad conversion: it is
+  logged as `broken` and left alone - replace it in Bazarr instead
+
+```
+5,20,35,50 * * * * /usr/bin/python3 $HOME/homelab-scripts/subtitle-overlap.py >> $HOME/homelab-scripts/subtitle-overlap.log 2>&1
+```
+
+```
+grep broken ~/homelab-scripts/subtitle-overlap.log
+python3 ~/homelab-scripts/subtitle-overlap.py --dry-run
+python3 ~/homelab-scripts/subtitle-overlap.py --file Episode.en.srt   # print the result
+```
+
 ## Two subtitles at once in Safari
 
 Symptom: in Safari, Jellyfin's subtitle sits bottom centre and a second copy
