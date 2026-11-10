@@ -183,10 +183,11 @@ one cue is on screen at a time:
 
 Bazarr also runs it on every subtitle it downloads, so a fresh file is merged
 at once instead of at the next cron run. Compose mounts `scripts/` read-only
-into the Bazarr container; in Bazarr, Settings → Subtitles → Post-Processing:
+into the Bazarr container; in Bazarr, Settings → Subtitles → Post-Processing
+(Bazarr runs it without a shell, hence `env`):
 
 ```
-MEDIA_ROOT=/media python3 /homelab-scripts/subtitle-overlap.py --fix-file "{{subtitles}}"
+env MEDIA_ROOT=/media python3 /homelab-scripts/subtitle-overlap.py --fix-file "{{subtitles}}"
 ```
 
 ```
