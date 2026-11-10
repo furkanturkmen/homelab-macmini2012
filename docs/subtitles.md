@@ -130,7 +130,7 @@ replaced. Files Bazarr did not download itself are reported and left alone.
 
 Symptom: a remote viewer on the Android TV app starts an anime episode, no
 subtitles come up, they restart it a few times and give up. Aoashi S2 and
-Dragon Ball Super: Beerus for robin, 2026-10-26.
+Dragon Ball Super: Beerus for a remote viewer, 2026-10-26.
 
 Remote users get the video remuxed, so the subtitle has to come as its own
 stream. When it is a track *inside* the MKV, Jellyfin reads the whole file to

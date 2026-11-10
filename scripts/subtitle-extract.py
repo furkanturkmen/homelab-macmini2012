@@ -7,7 +7,7 @@ A client that cannot draw the subtitles itself, or gets the video remuxed
 stream. For a track inside an MKV, Jellyfin has to read the whole file to
 pull it out: two and a half minutes for a 1.5 GB Aoashi episode on this
 disk. The viewer sees no subtitles, restarts, and the extraction starts over
-- Aoashi S2 and Dragon Ball Super were unwatchable for robin that way. A
+- Aoashi S2 and Dragon Ball Super were unwatchable for a remote viewer that way. A
 sidecar is a few kilobytes and loads at once.
 
 Only dialogue is kept. Crunchyroll and fansub ASS tracks carry signs,
