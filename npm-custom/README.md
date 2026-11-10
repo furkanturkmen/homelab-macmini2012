@@ -21,6 +21,8 @@ first place to look.
 | `http.conf` | `http` context, once | the whole nginx instance |
 | `server_proxy.conf` | end of every `server` block | **every** proxy host |
 
+The CORS maps and the `/apps/` sideload source both live in these two files.
+
 `server_proxy.conf` running for every host is why the directives in it are
 written to be inert by default: each value comes from a map in `http.conf` that
 returns the upstream's own header unless the request matches the one host and
@@ -74,6 +76,35 @@ It is deliberately not an NPM proxy host — NPM regenerates those from its
 database, and this one points at a laptop that is usually off. It also needs a
 DNS record (Pi-hole → the NPM host) for the name to resolve, and the upgrade
 headers in the block are what keep Metro's hot reload working through the proxy.
+
+## The sideload source
+
+`/apps/` on the public JellyLab host (`jellyfin.yourdomain.tld`, the name the
+relay already carries) serves the JellyLab `.ipa` and an AltStore-format
+`source.json` to SideStore, so people outside the house can install the app and
+get updates without a computer. Every other host answers `/apps/` with a 404.
+
+The files sit in `npm/data/apps/<secret>/` on the host (`/data/apps/` in the
+container). The folder name is the access key: a wrong one is a 404, there is
+no listing, and anything starting with a dot is refused. The secret itself is
+kept *outside* the served folder, at `npm/data/apps-secret` - it was once inside
+it, where `/apps/.secret` handed it to anybody who asked.
+
+```bash
+mkdir -p npm/data/apps/"$(head -c 18 /dev/urandom | base64 | tr '+/' '-_' | tr -d =)"
+```
+
+The JellyLab repo publishes into it with `npm run ipa:release` (build unsigned,
+scp, rewrite `source.json`). Rotating the secret is renaming the folder and
+updating that script's `~/.config/jellylab/release.env` on the Mac; everybody
+then needs the new source link.
+
+```bash
+S=<secret>
+curl -sI https://jellyfin.yourdomain.tld/apps/$S/source.json | head -1   # 200
+curl -sI https://jellyfin.yourdomain.tld/apps/wrong/source.json | head -1 # 404
+curl -sI https://jellyseerr.yourdomain.tld/apps/$S/source.json | head -1  # 404
+```
 
 ## Install
 
