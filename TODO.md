@@ -20,23 +20,21 @@ Not new services — settings in the ones already here.
   blocklists than yours. Needs the devices identified first (Pi-hole lists them
   under Clients once they have made a query), then a group per policy. The
   natural complement to the per-user media filters, and currently missing.
-- **Jellyfin per-user streaming limits.** Everyone is `remoteBitrateLimit:
-  unlimited`, `maxSessions: unlimited`, and everyone except one account may
-  transcode. On an HD 4000, two simultaneous transcodes is a bad afternoon. A
-  remote bitrate cap and a session limit per account bound that before it
-  becomes a support call. Nobody has hit it yet, which is why it is here and not
-  in the guide.
-- **Seerr request quotas.** Every account is unlimited, so one enthusiastic
-  evening can queue hundreds of titles and fill the disk. Set per-user in Seerr
-  (Users → edit → quotas), e.g. 10 movies and 5 series a week for the children,
-  unlimited for you. While in there, consider turning off
-  `enableSpecialEpisodes`: specials are badly named at every indexer, so they
-  are the requests most likely to sit "searching" forever.
-- **Uptime Kuma history retention.** 180 days by default — already 468,000
-  heartbeats and 70 MB after one month, and the file is in the nightly backup.
-  60 days is plenty for a household. Settings → Monitor History.
 
 Done and moved into the guide:
+
+- **Jellyfin per-user streaming limits.** Every non-admin account except the
+  owner's may run 2 streams at once (Dashboard → Users → edit → Maximum number
+  of simultaneous user sessions). No remote bitrate cap on purpose: a cap
+  forces a transcode of every file above it, and transcoding is exactly what
+  an HD 4000 cannot afford.
+- **Seerr request quotas.** 10 movies and 5 series a week for the children,
+  20 and 10 for other adults, unlimited for the owner (Users → edit →
+  quotas). `enableSpecialEpisodes` off: specials are badly named at every
+  indexer and sat "searching" forever.
+- **Uptime Kuma history retention.** 60 days instead of 180 (Settings →
+  Monitor History). After three months the database held 1.6 million
+  heartbeats and 245 MB, all of it in the nightly backup.
 
 - **Public links for friends**, through a relay VPS instead of Cloudflare
   Tunnel, whose terms do not allow streaming video
