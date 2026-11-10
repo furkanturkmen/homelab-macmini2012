@@ -391,6 +391,8 @@ services:
     volumes:
       - ./bazarr/config:/config
       - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media
+      # post-processing runs scripts/subtitle-overlap.py --fix-file on every download
+      - ./scripts:/homelab-scripts:ro
     ports:
       - "6767:6767"
 

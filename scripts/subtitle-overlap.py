@@ -195,7 +195,25 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true')
     ap.add_argument('--file', help='check this one file and print the result')
+    ap.add_argument('--fix-file', help='fix this one file in place if it lies in SUBTITLE_OVERLAP_DIRS '
+                                       '(Bazarr post-processing; never fails the download)')
     args = ap.parse_args()
+
+    if args.fix_file:
+        try:
+            media = setting('MEDIA_ROOT').rstrip('/')
+            roots = [os.path.join(media, r.strip()) + '/' for r in
+                     setting('SUBTITLE_OVERLAP_DIRS', 'anime').split(',') if r.strip()]
+            p = os.path.abspath(args.fix_file)
+            if p.lower().endswith('.srt') and any(p.startswith(r) for r in roots):
+                r = fix(p, False)
+                if r is None:
+                    print(f'broken {p}: most lines overlap, left as is')
+                elif any(r):
+                    print(f'fixed {r[0]} overlaps {r[1]} junk  {p}')
+        except Exception as e:  # a post-processing error must not undo the download
+            print(f'subtitle-overlap: {e}')
+        return
 
     if args.file:
         cues = parse(open(args.file, encoding='utf-8-sig').read())
