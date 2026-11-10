@@ -43,8 +43,10 @@ import urllib.request
 
 QB_HOST = 'http://127.0.0.1:8083'
 VPN_CONTAINER = 'gluetun'  # qBittorrent shares this container's network namespace
-ENV_FILE = '/home/furkan/homelab/.env'
-STATE_FILE = '/home/furkan/homelab-scripts/.torrent-guard-seen'
+HOMELAB_DIR = os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab'))
+STATE_DIR = os.path.expanduser(os.environ.get('HOMELAB_STATE_DIR', '~/homelab-scripts'))
+ENV_FILE = os.path.join(HOMELAB_DIR, '.env')
+STATE_FILE = os.path.join(STATE_DIR, '.torrent-guard-seen')
 
 # Executables and script types. None of these belong in a film or an episode.
 HOSTILE = {

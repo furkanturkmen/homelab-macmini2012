@@ -173,7 +173,8 @@ if ! grep -q "$uuid" /etc/fstab; then
 fi
 systemctl daemon-reload 2>/dev/null || true
 mount "$MOUNT"
-chown furkan:furkan "$MOUNT"
+owner="${SUDO_USER:-$(id -un)}"
+chown "$owner:$(id -gn "$owner")" "$MOUNT"
 
 green "   mounted:"
 df -h "$MOUNT" | tail -1 | sed 's/^/   /'

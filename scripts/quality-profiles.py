@@ -34,8 +34,8 @@ import sys
 import urllib.error
 import urllib.request
 
-HOST = os.environ.get('ARR_HOST', '192.168.68.59')
-ENV = os.path.expanduser('~/homelab/.env')
+HOST = os.environ.get('ARR_HOST', '127.0.0.1')  # the *arr ports are published on the host
+ENV = os.path.join(os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab')), '.env')
 
 # Named tiers rather than a slice of the app's own ordering.
 #

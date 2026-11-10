@@ -32,11 +32,33 @@ import sys
 import urllib.parse
 import urllib.request
 
-MEDIA = '/mnt/storage/media'
+HOMELAB_DIR = os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab'))
+STATE_DIR = os.path.expanduser(os.environ.get('HOMELAB_STATE_DIR', '~/homelab-scripts'))
+
+
+def setting(name, default=None):
+    """From the environment, else the stack's .env, else the default."""
+    value = os.environ.get(name)
+    if not value:
+        try:
+            with open(os.path.join(HOMELAB_DIR, '.env')) as f:
+                for line in f:
+                    if line.startswith(f'{name}='):
+                        value = line.split('=', 1)[1].strip().strip('"\'')
+        except OSError:
+            pass
+    if value:
+        return value
+    if default is None:
+        raise SystemExit(f'{name} is not set: add it to {HOMELAB_DIR}/.env')
+    return default
+
+
+MEDIA = setting('MEDIA_ROOT').rstrip('/')
 IN_CONTAINER = '/media'
-JELLYFIN = 'http://localhost:8096'
-BAZARR = 'http://localhost:6767'
-HOME = os.path.expanduser('~/homelab')
+JELLYFIN = setting('JELLYFIN_HOST_URL', 'http://127.0.0.1:8096')
+BAZARR = setting('BAZARR_HOST_URL', 'http://127.0.0.1:6767')
+HOME = HOMELAB_DIR
 BAZARR_DB = f'{HOME}/bazarr/config/db/bazarr.db'
 BAZARR_CFG = f'{HOME}/bazarr/config/config/config.yaml'
 VIDEO = ('.mkv', '.mp4', '.avi', '.m4v')

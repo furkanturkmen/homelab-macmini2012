@@ -26,8 +26,9 @@ import sys
 import tempfile
 import urllib.request
 
-LIVE_DB = os.path.expanduser('~/homelab/jellyseerr/config/db/db.sqlite3')
-STORE = os.path.expanduser('~/homelab/jellylab-push-data/content-filters.json')
+HOMELAB_DIR = os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab'))
+LIVE_DB = os.path.join(HOMELAB_DIR, 'jellyseerr/config/db/db.sqlite3')
+STORE = os.path.join(HOMELAB_DIR, 'jellylab-push-data/content-filters.json')
 # server/lib/adultTags.ts in the fork. The container never overrode them
 # (ADULT_TAG_IDS unset), so the defaults are what was in effect.
 DEFAULT_ADULT_TAGS = [256466, 155477, 195669, 198385, 356759, 341367]

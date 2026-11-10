@@ -12,9 +12,13 @@
 # are copied, never re-encoded. Runs from cron; DRY_RUN=1 only reports.
 set -uo pipefail
 
-MEDIA_HOST=/mnt/storage/media     # as the host sees it
+HOMELAB_DIR="${HOMELAB_DIR:-$HOME/homelab}"
+STATE_DIR="${HOMELAB_STATE_DIR:-$HOME/homelab-scripts}"
+# as the host sees it: MEDIA_ROOT from the environment, else from .env
+MEDIA_HOST="${MEDIA_ROOT:-$(sed -n 's/^MEDIA_ROOT=//p' "$HOMELAB_DIR/.env" | tr -d '"'\'' ')}"
+[ -n "$MEDIA_HOST" ] || { echo "MEDIA_ROOT is not set: add it to $HOMELAB_DIR/.env" >&2; exit 1; }
 MEDIA_CT=/media                   # as the jellyfin container sees it
-LOG="$HOME/homelab-scripts/mp4-text-guard.log"
+LOG="$STATE_DIR/mp4-text-guard.log"
 FF=/usr/lib/jellyfin-ffmpeg
 DRY_RUN=${DRY_RUN:-0}
 # hidden and outside every library folder, so no app scans it
@@ -24,7 +28,7 @@ KEEP_DAYS=14
 log() { printf '%s  %s\n' "$(date '+%F %T')" "$1" | tee -a "$LOG"; }
 ct()  { docker exec jellyfin "$@"; }
 
-exec 9>"$HOME/homelab-scripts/.mp4-text-guard.lock"
+exec 9>"$STATE_DIR/.mp4-text-guard.lock"
 flock -n 9 || exit 0
 
 # Sidecar names use the two-letter codes Bazarr writes, so an existing

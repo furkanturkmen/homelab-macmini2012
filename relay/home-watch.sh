@@ -12,7 +12,7 @@
 set -uo pipefail
 
 TOPIC="${HOME_WATCH_TOPIC:-CHANGE_ME}"
-PEER_IP="10.77.0.2"                  # the homelab end of the relay tunnel
+PEER_IP="${HOME_WATCH_PEER:-10.77.0.2}"  # the homelab end of the relay tunnel
 STALE_AFTER=300                      # seconds without a handshake = down
 STATE=/var/lib/home-watch.state
 REMIND_EVERY=3600                    # while down, repeat at most this often

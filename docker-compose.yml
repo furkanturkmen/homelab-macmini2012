@@ -25,9 +25,9 @@ services:
     # parsing 950k queries out of a 191MB database fills it, so FTL died and
     # restarted 504 times - taking DNS for the whole network with it each time.
     # 2026-09-05: pihole's conditional forwarding used to point at pihole.
-    # `revServers = ["true,192.168.68.0/24,192.168.68.59,lan"]` - .59 is this
+    # `revServers = ["true,<lan-subnet>,<this-host-ip>,lan"]` - that IP is this
     # host, so every *.lan name pihole did not already hold, and every
-    # 192.168.68.x reverse lookup, was forwarded by pihole to pihole and round
+    # LAN reverse lookup, was forwarded by pihole to pihole and round
     # again. The loop ran at whatever dns.rateLimit allowed, which somebody had
     # raised from 1000 to 20000 a minute, and 20,008 queries a minute is what
     # filled /dev/shm three times and took DNS down with it. It is also why
@@ -36,7 +36,7 @@ services:
     #
     # Now points at the router. pihole.toml is gitignored, so the setting is
     # only on the box - it is written down here because nothing else records it:
-    #   pihole-FTL --config dns.revServers '["true,192.168.68.0/24,192.168.68.1,lan"]'
+    #   pihole-FTL --config dns.revServers '["true,<lan-subnet>,<router-ip>,lan"]'
     #
     # 512MB of shared memory is still needed; see the note on maxDBdays.
     shm_size: 512m
@@ -311,7 +311,7 @@ services:
       TZ: "${TZ}"
     volumes:
       - ./nextcloud/html:/var/www/html
-      - /mnt/storage/documents:/var/www/html/data
+      - ${NEXTCLOUD_DATA:?set NEXTCLOUD_DATA in .env}:/var/www/html/data
 
   # =========================================================
   # MEDIA — Jellyfin + *arr pipeline
@@ -338,7 +338,7 @@ services:
     volumes:
       - ./jellyfin/config:/config
       - ./jellyfin/cache:/cache
-      - /mnt/storage/media:/media
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media
     environment:
       TZ: "${TZ}"
 
@@ -353,7 +353,7 @@ services:
       TZ: "${TZ}"
     volumes:
       - ./radarr/config:/config
-      - /mnt/storage/media:/media
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media
     ports:
       - "7878:7878"
 
@@ -375,7 +375,7 @@ services:
       DOTNET_gcServer: "0"
     volumes:
       - ./sonarr/config:/config
-      - /mnt/storage/media:/media
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media
     ports:
       - "8989:8989"
 
@@ -390,7 +390,7 @@ services:
       TZ: "${TZ}"
     volumes:
       - ./bazarr/config:/config
-      - /mnt/storage/media:/media
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media
     ports:
       - "6767:6767"
 
@@ -505,7 +505,7 @@ services:
       VPN_PORT_FORWARDING_UP_COMMAND: "/gluetun/update-qbit-port.sh {{PORTS}}"
       # Reply traffic to the WebUI. Without these the firewall drops responses
       # to anything off the container network - LAN and VPN clients included.
-      FIREWALL_OUTBOUND_SUBNETS: "192.168.68.0/22,100.64.0.0/10,172.16.0.0/12"
+      FIREWALL_OUTBOUND_SUBNETS: "${LAN_SUBNET:?set LAN_SUBNET in .env},100.64.0.0/10,172.16.0.0/12"
       # An HTTP proxy for Prowlarr, so indexer searches leave through the tunnel
       # too and torrent sites never see the home address. Other containers reach
       # it as gluetun:8888; it is deliberately not published on the host.
@@ -533,7 +533,7 @@ services:
       WEBUI_PORT: 8083
     volumes:
       - ./qbittorrent/config:/config
-      - /mnt/storage/media:/media
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media
 
   decluttarr:
     container_name: decluttarr
@@ -755,7 +755,7 @@ services:
       - ./jellylab-push:/app:ro
       - ./jellylab-push-data:/data
       # read-only, purely so /storage can report free space on the media disk
-      - /mnt/storage/media:/media:ro
+      - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media:ro
     depends_on:
       - ntfy
 

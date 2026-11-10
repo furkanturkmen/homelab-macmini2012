@@ -11,7 +11,7 @@ them embedded.
 Set the cutoff to nothing and Bazarr keeps going until it has all of them, or
 has genuinely failed to find them.
 
-Languages here are English, Dutch and Turkish. Adding a language
+Languages come from SUBTITLE_LANGS in .env (e.g. en,nl,tr). Adding a language
 does not retroactively fetch it: existing titles need a search for wanted
 subtitles afterwards, which --search triggers.
 
@@ -22,22 +22,41 @@ import json
 import sys
 import urllib.error
 import urllib.parse
+import os
 import urllib.request
 
-HOST = '192.168.68.59'
-PORT = 6767
+HOMELAB_DIR = os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab'))
+STATE_DIR = os.path.expanduser(os.environ.get('HOMELAB_STATE_DIR', '~/homelab-scripts'))
+
+
+def setting(name, default=None):
+    """From the environment, else the stack's .env, else the default."""
+    value = os.environ.get(name)
+    if not value:
+        try:
+            with open(os.path.join(HOMELAB_DIR, '.env')) as f:
+                for line in f:
+                    if line.startswith(f'{name}='):
+                        value = line.split('=', 1)[1].strip().strip('"\'')
+        except OSError:
+            pass
+    if value:
+        return value
+    if default is None:
+        raise SystemExit(f'{name} is not set: add it to {HOMELAB_DIR}/.env')
+    return default
+
+
+HOST = setting('BAZARR_HOST', '127.0.0.1')  # Bazarr's port is published on the host
+PORT = int(setting('BAZARR_PORT', '6767'))
 CONFIG = '/config/config/config.yaml'
 
 # Japanese is deliberately absent. For anime it ships embedded in the release
 # rather than published separately - use_embedded_subs is on, so those tracks
 # are already found - and asking for it externally spent a quarter of the
 # throttle budget on searches that were never going to land.
-WANTED = [
-    ('en', 'English'),
-    ('nl', 'Dutch'),
-    ('tr', 'Turkish'),
-]
-PROFILE_NAME = 'English + Dutch + Turkish'
+# Two-letter codes, in order of preference, from SUBTITLE_LANGS in .env.
+CODES = [c.strip() for c in setting('SUBTITLE_LANGS').split(',') if c.strip()]
 
 
 def api_key():
@@ -73,7 +92,18 @@ class Bazarr:
             self.changed += 1
 
 
+def wanted(b):
+    """(code, name) pairs, named the way Bazarr names them."""
+    try:
+        names = {l.get('code2'): l.get('name') for l in b.get('/system/languages') or []}
+    except urllib.error.HTTPError:
+        names = {}
+    return [(c, names.get(c) or c) for c in CODES]
+
+
 def sync_profile(b):
+    WANTED = wanted(b)
+    PROFILE_NAME = ' + '.join(n for _, n in WANTED)
     profiles = b.get('/system/languages/profiles')
     target = next((p for p in profiles if p['profileId'] == 1), None)
     if target is None:

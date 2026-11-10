@@ -14,13 +14,12 @@
 # proxy at a closed port: restic then fails rather than falling back.
 #
 # Needs in .env: B2_BUCKET, B2_ACCOUNT_ID, B2_ACCOUNT_KEY, RESTIC_PASSWORD,
-# MARIADB_ROOT_PASSWORD, NTFY_TOPIC. Optional: KUMA_PUSH_TOKEN.
+# MARIADB_ROOT_PASSWORD, NTFY_TOPIC, NEXTCLOUD_DATA. Optional: KUMA_PUSH_TOKEN.
 set -euo pipefail
 
 HOMELAB_DIR="${HOMELAB_DIR:-$HOME/homelab}"
 STAGING="${BACKUP_STAGING:-$HOME/.backup-staging}"
-LOG="${BACKUP_LOG:-$HOME/homelab-scripts/backup.log}"
-NEXTCLOUD_DATA="${NEXTCLOUD_DATA:-/mnt/storage/documents}"
+LOG="${BACKUP_LOG:-${HOMELAB_STATE_DIR:-$HOME/homelab-scripts}/backup.log}"
 RESTIC_IMAGE="${RESTIC_IMAGE:-restic/restic:latest}"
 HELPER_IMAGE="${HELPER_IMAGE:-python:3-alpine}"
 # No colon: an explicitly empty BACKUP_PROXY means "no proxy", while unset
@@ -48,7 +47,7 @@ set -a
 . "$HOMELAB_DIR/.env"
 set +a
 
-for v in B2_BUCKET B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD; do
+for v in B2_BUCKET B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD NEXTCLOUD_DATA; do
   [ -n "${!v:-}" ] || { echo "FATAL: $v missing from .env"; exit 1; }
 done
 
@@ -126,9 +125,17 @@ cat > "$STAGING/include.txt" <<'EOF'
 /data/pihole/dnsmasq
 /data/dnscrypt-proxy/dnscrypt-proxy.toml
 /data/decluttarr/config.yaml
-/data/7dtd/saves
 /documents
 EOF
+
+# Paths that are yours rather than the stack's - a game server's saves, say -
+# go in backup-extra.txt (gitignored), one per line, relative to HOMELAB_DIR.
+# The override file holding such services is picked up the same way.
+[ -f "$HOMELAB_DIR/docker-compose.override.yml" ] && echo /data/docker-compose.override.yml >> "$STAGING/include.txt"
+if [ -f "$HOMELAB_DIR/backup-extra.txt" ]; then
+  echo /data/backup-extra.txt >> "$STAGING/include.txt"
+  grep -vE '^[[:space:]]*(#|$)' "$HOMELAB_DIR/backup-extra.txt" | sed 's|^/*|/data/|' >> "$STAGING/include.txt"
+fi
 
 cat > "$STAGING/exclude.txt" <<'EOF'
 *.log
