@@ -12,8 +12,8 @@ Only the folders in CONVERT_8BIT_DIRS (comma-separated, relative to
 MEDIA_ROOT) are touched; empty means nothing is converted. Audio, subtitles
 and attached fonts are copied unchanged, so built-in subtitles stay in sync.
 The new file replaces the original only when it has the same tracks and
-length. While anyone is watching something in Jellyfin the conversion is
-paused, so playback keeps the CPU and the disk.
+length. While Jellyfin transcodes for someone the conversion is paused, so
+that playback keeps the CPU; the swap waits until nobody has the file open.
 
 Runs from cron, one file at a time. --dry-run only lists what it would do.
 """
@@ -80,17 +80,29 @@ def ten_bit(info):
     return any(t == 'video' and '10' in (p or '') for t, _, p in info['streams'])
 
 
-def watching():
-    """True while any Jellyfin session is playing something."""
+def sessions():
+    """Jellyfin sessions that are playing something; [] when unknown."""
     key = setting('JELLYFIN_API_KEY', '')
     if not key:
-        return False
+        return []
     try:
         req = urllib.request.Request(f'{JELLYFIN}/Sessions',
                                      headers={'Authorization': f'MediaBrowser Token="{key}"'})
-        return any(s.get('NowPlayingItem') for s in json.load(urllib.request.urlopen(req, timeout=20)))
+        return [s for s in json.load(urllib.request.urlopen(req, timeout=20)) if s.get('NowPlayingItem')]
     except Exception:
-        return False
+        return []
+
+
+def transcoding():
+    """True while Jellyfin converts something live: that needs the CPU.
+    A device that plays the file itself costs the server next to nothing."""
+    return any((s.get('PlayState') or {}).get('PlayMethod') == 'Transcode' for s in sessions())
+
+
+def playing(path):
+    """True while someone has this very file open."""
+    inside = path.replace(MEDIA, IN_CONTAINER, 1)
+    return any(s['NowPlayingItem'].get('Path') == inside for s in sessions())
 
 
 def candidates():
@@ -118,7 +130,7 @@ def convert(src, info):
         '-tune', 'animation', '-pix_fmt', 'yuv420p', '-profile:v', 'high', f'/work/{tmp_name}')
     paused = False
     while run('docker', 'ps', '-q', '-f', f'name=^{WORKER}$').stdout.strip():
-        busy = watching()
+        busy = transcoding()
         if busy and not paused:
             run('docker', 'pause', WORKER)
             paused = True
@@ -133,7 +145,7 @@ def convert(src, info):
         if os.path.exists(tmp):
             os.remove(tmp)
         return
-    while watching():  # a player may have the original open with byte ranges
+    while playing(src):  # a player may have the original open with byte ranges
         time.sleep(30)
     os.chmod(tmp, st.st_mode & 0o7777)
     os.replace(tmp, src)
