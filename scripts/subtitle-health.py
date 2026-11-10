@@ -70,6 +70,11 @@ HOLE_S = {'episode': 300, 'movie': 900}   # 1917, The Revenant, Cast Away: 10 re
 MIN_PER_MIN = 3         # fewer lines per minute than this is not dialogue
 MAX_PER_MIN = 40        # more is not dialogue either
 MAX_TRIES = 3           # blacklisted this often for one title and language: stop
+# Lines overlapping by more than OVERLAP_S, as a share of all lines. A sign over
+# dialogue is merged by subtitle-overlap.py; a file still this tangled is two
+# tracks pasted together or karaoke syllables (JUJUTSU KAISEN, 2026-11-10).
+OVERLAP_S = 0.5
+TANGLED = 0.3
 
 
 def env(key):
@@ -136,6 +141,9 @@ def judge(c, runtime, kind):
     # The same allowance as a hole covers the credits.
     if runtime - last > HOLE_S[kind]:
         problems.append(f'truncated, ends at {last / 60:.1f} of {runtime / 60:.1f}min')
+    tangled = sum(1 for (_, e), (a, _) in zip(c, c[1:]) if e - a > OVERLAP_S)
+    if tangled > TANGLED * len(c):
+        problems.append(f'tangled, {tangled} of {len(c)} lines overlap')
     per_min = len(c) / (runtime / 60)
     if per_min < MIN_PER_MIN:
         problems.append(f'sparse {len(c)} lines')

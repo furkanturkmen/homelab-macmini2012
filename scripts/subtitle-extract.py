@@ -59,7 +59,11 @@ VIDEO = ('.mkv',)
 TEXT = ('ass', 'ssa', 'subrip')
 EN_SIDECAR = re.compile(r'\.(?:[^.]+\.)?en(?:g)?(?:\.(?:hi|sdh|default))?\.(?:srt|ass)$', re.I)
 # Styles that are never dialogue: songs, karaoke, on-screen text, titles.
-NOT_DIALOGUE = re.compile(r'^(op|ed)[ _0-9-]|romaji|kara|song|sign|title|next|disclaimer|insert|lyric', re.I)
+# OPR/EDR/EDE: opening and ending in romaji or English (Goblin Slayer S02);
+# snk4p2-ed1-tl: op/ed as a part anywhere in the name (Attack on Titan S04);
+# Onscreen1: signs (JUJUTSU KAISEN S03).
+NOT_DIALOGUE = re.compile(r'(^|[^a-z])(op|ed)([0-9]*([^a-z]|$)|[a-z]$)'
+                          r'|opening|ending|romaji|kara|song|sign|onscreen|title|next|disclaimer|insert|lyric', re.I)
 OVERRIDE = re.compile(r'\{[^}]*\}')
 DRAWING = re.compile(r'\\p[1-9]')
 
@@ -110,7 +114,10 @@ def dialogue(ass):
             parts = line[9:].split(',', len(fields) - 1)
             ev = dict(zip(fields, (p.strip() for p in parts)))
             text = ev.get('text', '')
-            if NOT_DIALOGUE.search(ev.get('style', '')) or DRAWING.search(text):
+            # A filled Effect field is a generated karaoke syllable ('fx',
+            # 'template', 'karaoke'), never a line of dialogue: Goblin Slayer
+            # S02 had 15,000 of them under styles named after the band.
+            if ev.get('effect') or NOT_DIALOGUE.search(ev.get('style', '')) or DRAWING.search(text):
                 continue
             text = OVERRIDE.sub('', text).replace('\\N', '\n').replace('\\n', '\n').replace('\\h', ' ')
             text = '\n'.join(l.strip() for l in text.split('\n') if l.strip())
