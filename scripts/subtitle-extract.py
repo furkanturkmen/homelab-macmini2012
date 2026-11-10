@@ -61,11 +61,14 @@ EN_SIDECAR = re.compile(r'\.(?:[^.]+\.)?en(?:g)?(?:\.(?:hi|sdh|default))?\.(?:sr
 # Styles that are never dialogue: songs, karaoke, on-screen text, titles.
 # OPR/EDR/EDE: opening and ending in romaji or English (Goblin Slayer S02);
 # snk4p2-ed1-tl: op/ed as a part anywhere in the name (Attack on Titan S04);
-# Onscreen1: signs (JUJUTSU KAISEN S03).
-NOT_DIALOGUE = re.compile(r'(^|[^a-z])(op|ed)([0-9]*([^a-z]|$)|[a-z]$)'
+# Onscreen1: signs (JUJUTSU KAISEN S03); EDTL/EDRom/OPTrans (Steins;Gate).
+NOT_DIALOGUE = re.compile(r'(^|[^a-z])(op|ed)[0-9]*([a-z]|tl|rom|romaji|eng?|jpn?|trans|kara)?([^a-z]|$)'
                           r'|opening|ending|romaji|kara|song|sign|onscreen|title|next|disclaimer|insert|lyric', re.I)
 OVERRIDE = re.compile(r'\{[^}]*\}')
 DRAWING = re.compile(r'\\p[1-9]')
+# Text placed at a fixed spot is typeset on the picture - a sign, a
+# blackboard, a phone screen (Steins;Gate 'BlackboardDerp', 2000 lines).
+PLACED = re.compile(r'\\(pos|move)\(')
 
 
 def ct(*args, timeout=900):
@@ -117,7 +120,8 @@ def dialogue(ass):
             # A filled Effect field is a generated karaoke syllable ('fx',
             # 'template', 'karaoke'), never a line of dialogue: Goblin Slayer
             # S02 had 15,000 of them under styles named after the band.
-            if ev.get('effect') or NOT_DIALOGUE.search(ev.get('style', '')) or DRAWING.search(text):
+            if (ev.get('effect') or NOT_DIALOGUE.search(ev.get('style', ''))
+                    or DRAWING.search(text) or PLACED.search(text)):
                 continue
             text = OVERRIDE.sub('', text).replace('\\N', '\n').replace('\\n', '\n').replace('\\h', ' ')
             text = '\n'.join(l.strip() for l in text.split('\n') if l.strip())

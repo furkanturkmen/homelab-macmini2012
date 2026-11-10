@@ -181,6 +181,14 @@ one cue is on screen at a time:
 5,20,35,50 * * * * /usr/bin/python3 $HOME/homelab-scripts/subtitle-overlap.py >> $HOME/homelab-scripts/subtitle-overlap.log 2>&1
 ```
 
+Bazarr also runs it on every subtitle it downloads, so a fresh file is merged
+at once instead of at the next cron run. Compose mounts `scripts/` read-only
+into the Bazarr container; in Bazarr, Settings → Subtitles → Post-Processing:
+
+```
+MEDIA_ROOT=/media python3 /homelab-scripts/subtitle-overlap.py --fix-file "{{subtitles}}"
+```
+
 ```
 grep broken ~/homelab-scripts/subtitle-overlap.log
 python3 ~/homelab-scripts/subtitle-overlap.py --dry-run
