@@ -42,10 +42,25 @@ mkdir -p "$(dirname "$LOG")"
 exec > >(tee -a "$LOG") 2>&1
 echo "=== $(date '+%Y-%m-%d %H:%M:%S') backup starting ==="
 
-set -a
-# shellcheck disable=SC1091
-. "$HOMELAB_DIR/.env"
-set +a
+# Read .env as KEY=VALUE lines, the way Docker Compose does, instead of running
+# it as shell: a value with spaces then needs no quotes, and nothing in it runs.
+load_env() {  # load_env <file>
+  local line key value
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    [[ $line =~ ^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || continue
+    key="${BASH_REMATCH[2]}"
+    value="${BASH_REMATCH[3]}"
+    if [[ $value =~ ^\"(.*)\"[[:space:]]*$ || $value =~ ^\'(.*)\'[[:space:]]*$ ]]; then
+      value="${BASH_REMATCH[1]}"
+    else
+      value="${value%%[[:space:]]#*}"
+      value="${value%"${value##*[![:space:]]}"}"
+    fi
+    export "$key=$value"
+  done < "$1"
+}
+load_env "$HOMELAB_DIR/.env"
 
 for v in B2_BUCKET B2_ACCOUNT_ID B2_ACCOUNT_KEY RESTIC_PASSWORD NEXTCLOUD_DATA; do
   [ -n "${!v:-}" ] || { echo "FATAL: $v missing from .env"; exit 1; }
