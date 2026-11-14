@@ -507,14 +507,40 @@ async function airingSeries(base, key) {
  * Entirely optional. With no password configured this returns an empty map and
  * every caller carries on with the *arr figures, exactly as before.
  *
- * The session cookie is fetched per call rather than cached. This is asked for
- * once every few seconds by one screen, a login costs one round trip on the
- * docker network, and a cached cookie that has silently expired is a class of
- * bug not worth inviting for that.
+ * One session is kept and reused. qBittorrent holds a limited number of
+ * sessions (web_ui_sessions_count_limit) and drops the oldest when a new login
+ * goes over it, so logging in on every call - every few seconds while the
+ * downloads screen is open - signed the browser out of the web UI within
+ * seconds. A session that has expired or been dropped answers 403; that clears
+ * it and the call logs in once more.
  */
-async function qbitLive() {
-  if (!QBIT_PASSWORD) return {};
+let qbitCookie = null;
+let qbitLoggingIn = null;
 
+function qbitSession() {
+  if (qbitCookie) return Promise.resolve(qbitCookie);
+  // Calls that arrive together share one login instead of each starting one.
+  qbitLoggingIn ??= qbitLogin()
+    .then((cookie) => (qbitCookie = cookie))
+    .finally(() => { qbitLoggingIn = null; });
+  return qbitLoggingIn;
+}
+
+async function qbitTorrents() {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const cookie = await qbitSession();
+    const res = await fetch(`${QBIT_URL}/api/v2/torrents/info`, {
+      headers: { Cookie: cookie },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) return res.json();
+    if (res.status !== 401 && res.status !== 403) throw new Error(`${res.status}`);
+    if (qbitCookie === cookie) qbitCookie = null;
+  }
+  throw new Error('session rejected');
+}
+
+async function qbitLogin() {
   const body = new URLSearchParams({ username: QBIT_USER, password: QBIT_PASSWORD });
   const auth = await fetch(`${QBIT_URL}/api/v2/auth/login`, {
     method: 'POST',
@@ -541,15 +567,14 @@ async function qbitLive() {
   if (!/^[^=]*SID[^=]*=./i.test(cookie)) {
     throw new Error(cookie ? `unexpected cookie ${cookie.split('=')[0]}` : 'login rejected');
   }
+  return cookie;
+}
 
-  const res = await fetch(`${QBIT_URL}/api/v2/torrents/info`, {
-    headers: { Cookie: cookie },
-    signal: AbortSignal.timeout(8000),
-  });
-  if (!res.ok) throw new Error(`${res.status}`);
+async function qbitLive() {
+  if (!QBIT_PASSWORD) return {};
 
   const out = {};
-  for (const t of await res.json()) {
+  for (const t of await qbitTorrents()) {
     // The *arrs record the hash uppercase in downloadId; qBittorrent reports
     // it lowercase. Lowercase is the key everywhere here.
     out[String(t.hash).toLowerCase()] = {
