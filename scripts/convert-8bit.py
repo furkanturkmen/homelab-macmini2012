@@ -55,6 +55,10 @@ JELLYFIN = setting('JELLYFIN_HOST_URL', 'http://127.0.0.1:8096')
 IN_CONTAINER = '/media'
 FF = '/usr/lib/jellyfin-ffmpeg'
 LOCK = os.path.join(STATE_DIR, '.convert-8bit.lock')
+# Files whose conversion failed, with the size and time they had then. They are
+# skipped until the file changes (an upgrade, a new release), instead of being
+# encoded again in full every run only to fail the same way.
+FAILED = os.path.join(STATE_DIR, 'convert-8bit.failed.json')
 VIDEO = ('.mkv',)     # MP4 cannot carry the ASS subtitles and fonts the copy keeps
 MIN_AGE = 600          # leave files alone while they may still be written
 WORKER = 'convert-8bit'
@@ -132,18 +136,47 @@ def candidates():
     return ahead + [p for p in found if p not in ahead]
 
 
+def stamp(path):
+    st = os.stat(path)
+    return f'{st.st_size}:{int(st.st_mtime)}'
+
+
+def load_failed():
+    try:
+        with open(FAILED) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_failed(failed):
+    tmp = FAILED + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(failed, f, indent=1, sort_keys=True)
+    os.replace(tmp, FAILED)
+
+
+def kinds(info):
+    """Track types and how many of each. The order may differ after a remux:
+    Matroska writes a cover picture before the font attachments."""
+    return sorted(t for t, _, _ in info['streams'])
+
+
 def convert(src, info):
+    """True when the file was replaced, False when the conversion failed."""
     d, name = os.path.split(src)
     tmp_name = f'.{os.path.splitext(name)[0]}.8bit.tmp.mkv'
     tmp = os.path.join(d, tmp_name)
     image = run('docker', 'inspect', 'jellyfin', '-f', '{{.Config.Image}}').stdout.strip()
     st = os.stat(src)
     run('docker', 'rm', '-f', WORKER)
-    run('docker', 'run', '-d', '--name', WORKER, '--rm', '--cpu-shares', '256',
+    # :V is video that is not a cover picture. A release with cover art carries
+    # it as a second video track; encoding that too failed on its odd height.
+    run('docker', 'run', '-d', '--name', WORKER, '--cpu-shares', '256',
         '--user', f'{st.st_uid}:{st.st_gid}', '-v', f'{d}:/work', '--entrypoint', f'{FF}/ffmpeg',
         image, '-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', f'/work/{name}',
-        '-map', '0', '-c', 'copy', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '19',
-        '-tune', 'animation', '-pix_fmt', 'yuv420p', '-profile:v', 'high', f'/work/{tmp_name}')
+        '-map', '0', '-c', 'copy', '-c:V', 'libx264', '-preset', 'veryfast', '-crf', '19',
+        '-tune', 'animation', '-pix_fmt:V', 'yuv420p', '-profile:V', 'high', f'/work/{tmp_name}')
     paused = False
     while run('docker', 'ps', '-q', '-f', f'name=^{WORKER}$').stdout.strip():
         busy = transcoding()
@@ -154,19 +187,31 @@ def convert(src, info):
             run('docker', 'unpause', WORKER)
             paused = False
         time.sleep(30)
+    errors = run('docker', 'logs', '--tail', '3', WORKER).stderr.strip()
+    run('docker', 'rm', '-f', WORKER)
     new = probe(tmp) if os.path.exists(tmp) else None
-    same_tracks = new and [s[0] for s in new['streams']] == [s[0] for s in info['streams']]
-    if not (same_tracks and abs(new['duration'] - info['duration']) < 1 and not ten_bit(new)):
-        print(f'FAILED  {os.path.relpath(src, MEDIA)}: check did not pass, original kept', flush=True)
+    if not new:
+        why = f'encoder failed: {errors}' if errors else 'no output'
+    elif kinds(new) != kinds(info):
+        why = f'tracks differ: {kinds(info)} -> {kinds(new)}'
+    elif abs(new['duration'] - info['duration']) >= 1:
+        why = f'length differs: {info["duration"]:.0f}s -> {new["duration"]:.0f}s'
+    elif ten_bit(new):
+        why = 'still 10-bit'
+    else:
+        why = None
+    if why:
+        print(f'FAILED  {os.path.relpath(src, MEDIA)}: {why}; original kept', flush=True)
         if os.path.exists(tmp):
             os.remove(tmp)
-        return
+        return False
     while playing(src):  # a player may have the original open with byte ranges
         time.sleep(30)
     os.chmod(tmp, st.st_mode & 0o7777)
     os.replace(tmp, src)
     print(f'8-bit   {os.path.relpath(src, MEDIA)}: {st.st_size // 1000000} MB -> '
           f'{os.stat(src).st_size // 1000000} MB', flush=True)
+    return True
 
 
 def main():
@@ -187,7 +232,17 @@ def main():
         if args.dry_run:
             print(f'WOULD convert {os.path.relpath(src, MEDIA)}')
             continue
-        convert(src, info)
+        failed = load_failed()
+        if failed.get(src) == stamp(src):
+            continue
+        before = stamp(src)
+        ok = convert(src, info)
+        failed = load_failed()
+        if ok:
+            failed.pop(src, None)
+        else:
+            failed[src] = before
+        save_failed(failed)
 
 
 if __name__ == '__main__':
