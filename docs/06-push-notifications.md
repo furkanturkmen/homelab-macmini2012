@@ -82,6 +82,15 @@ The script does not word the message itself. It hands the event to
   for 5 minutes (at most 30 minutes after the first), with the numbers as
   ranges: *an anime: 31 new episodes — Season 1: episodes 30–43, 54–76*.
   One per episode meant 115 pushes for one anime in a day.
+- **An episode that may be filed wrong** gets its own push next to the
+  batch: *Check this: an anime — S01E02: the file is 3 min, the episode should
+  be about 24 min*. jellylab-push looks the file up in Sonarr and questions it
+  when the file is under half or over double the episode's length (an extra
+  or a film filed as an episode), or when the release numbers episodes
+  straight through past a bonus episode Sonarr counts in between (everything
+  after it lands one place too early). This needs the script to pass
+  `sonarr_series_id`, `sonarr_episodefile_id`,
+  `sonarr_episodefile_sourcepath` and `sonarr_episodefile_scenename`.
 - **A film** goes out at once: *New film: a film (2021)*.
 - **A stuck import** says why. The script is not told the reason, so
   jellylab-push reads it off the queue row and translates it: *Needs a hand:

@@ -14,6 +14,9 @@
  *   gone quiet for a few minutes - "An anime: 31 new episodes" with the
  *   numbers as ranges. A drip of single episodes still arrives on its own,
  *   just a few minutes late.
+ * - An imported episode is checked against what Sonarr filed it as (length,
+ *   and numbering that runs across a bonus episode); a doubt gets its own
+ *   "Check this" push, sent with the series' batch.
  * - A film is sent straight away. There is never more than one at a time.
  * - A stuck import asks the app *why* it is stuck. The Custom Script is not
  *   told - there is no status-message variable - but the queue row still has
@@ -181,26 +184,154 @@ async function queueReasons(app, downloadId) {
   }
 }
 
+/*
+ * Is the file the episode it was filed as?
+ *
+ * Sonarr files an import by the numbers in the release name, and two ways of
+ * getting that wrong went unnoticed for days:
+ *
+ * - Extras numbered like episodes. Thirteen 3-minute audio dramas of a show
+ *   ("Audio Dramas - 02") were filed as its real episodes 2, 3, 8 and 13, and
+ *   a 71-minute prequel film as episode 1 of another. The length gives these
+ *   away: a file far shorter or longer than the episode it replaces is not
+ *   that episode.
+ * - Straight-through numbering across a bonus episode. Fansub batches number
+ *   an anime 01-13; Sonarr's episode list counted an OVA as number 11, so the
+ *   release's 11 was taken for the OVA and skipped, and 12 and 13 landed on
+ *   episodes 11 and 12. Same length, so only the numbering shows it: the
+ *   release counts straight through and a bonus episode sits inside the count.
+ *
+ * Episode lengths vary with recaps and trimmed credits, and double-length
+ * finales exist, so only a file under half or over double the expected
+ * length is questioned. The misfiled extras were an eighth and three times
+ * the length.
+ */
+const SHORTER_THAN = 0.5;
+const LONGER_THAN = 2;
+
+/** "1:02:03" or "25:03" -> minutes. */
+export function minutes(runTime) {
+  const parts = String(runTime ?? '').split(':').map(Number);
+  if (!parts.length || parts.some(n => !Number.isFinite(n))) return null;
+  const seconds = parts.reduce((total, n) => total * 60 + n, 0);
+  return seconds > 0 ? seconds / 60 : null;
+}
+
+/**
+ * Reasons to doubt one imported file, in plain words; [] when it looks right.
+ * `label` names the episode(s), `fileMinutes` is the file's length,
+ * `expectedMinutes` the episodes' combined length, `straightNumbers` the
+ * release's own numbers when it counts straight through, and `bonus` the
+ * bonus episodes Sonarr counts inside that range ({ label, number }).
+ */
+export function importDoubts({ label, fileMinutes, expectedMinutes, straightNumbers = [], bonus = [] }) {
+  const doubts = [];
+  if (fileMinutes && expectedMinutes) {
+    const file = Math.round(fileMinutes);
+    const want = Math.round(expectedMinutes);
+    if (fileMinutes < expectedMinutes * SHORTER_THAN) {
+      doubts.push(`${label}: the file is ${file} min, the episode should be about ${want} min. It may be an extra (special, audio drama) filed as a real episode.`);
+    } else if (fileMinutes > expectedMinutes * LONGER_THAN) {
+      doubts.push(`${label}: the file is ${file} min, the episode should be about ${want} min. It may be a film or several episodes in one file.`);
+    }
+  }
+  const top = Math.max(0, ...straightNumbers);
+  const inside = bonus.filter(b => b.number <= top);
+  if (inside.length) {
+    const which = inside.map(b => `${b.label} as number ${b.number}`).join(', ');
+    doubts.push(`${label}: the release numbers episodes straight through (this file is its ${straightNumbers.join(', ')}), but Sonarr counts the bonus episode ${which}. From there on the episodes may sit one place too early, and the release's number ${inside[0].number} may have been skipped.`);
+  }
+  return doubts;
+}
+
+async function sonarr(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  const res = await fetch(`${SONARR_URL}/api/v3/${path}${sep}apikey=${SONARR_API_KEY}`,
+    { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`sonarr ${path.split('?')[0]} answered ${res.status}`);
+  return res.json();
+}
+
+const pad = n => String(n).padStart(2, '0');
+const epLabel = e => `S${pad(e.seasonNumber)}E${pad(e.episodeNumber)}`;
+
+/** Look the imported file up in Sonarr and return importDoubts for it. */
+export async function checkImport(v) {
+  const fileId = Number(v.sonarr_episodefile_id);
+  const seriesId = Number(v.sonarr_series_id);
+  if (!SONARR_API_KEY || !fileId || !seriesId) return [];
+  try {
+    const [file, episodes, series] = await Promise.all([
+      sonarr(`episodefile/${fileId}`),
+      sonarr(`episode?seriesId=${seriesId}`),
+      sonarr(`series/${seriesId}`),
+    ]);
+    const mine = episodes.filter(e => e.episodeFileId === fileId);
+    if (!mine.length) return [];
+    const expectedMinutes = mine.reduce((sum, e) => sum + (e.runtime || series.runtime || 0), 0);
+
+    // How Sonarr reads the release's own name: the source file first, since a
+    // batch's folder name ("01-13") says nothing about one episode.
+    const name = (v.sonarr_episodefile_sourcepath ?? '').split(/[\\/]/).pop()
+      || v.sonarr_episodefile_scenename || '';
+    let straightNumbers = [];
+    if (name) {
+      const parsed = (await sonarr(`parse?title=${encodeURIComponent(name)}`)).parsedEpisodeInfo ?? {};
+      if (parsed.absoluteEpisodeNumbers?.length && !parsed.episodeNumbers?.length) {
+        straightNumbers = parsed.absoluteEpisodeNumbers;
+      }
+    }
+    const bonus = episodes
+      .filter(e => e.seasonNumber === 0 && e.absoluteEpisodeNumber)
+      .map(e => ({ label: epLabel(e), number: e.absoluteEpisodeNumber }))
+      .sort((a, b) => a.number - b.number);
+
+    return importDoubts({
+      label: mine.map(epLabel).join('+'),
+      fileMinutes: minutes(file.mediaInfo?.runTime),
+      expectedMinutes,
+      straightNumbers,
+      bonus,
+    });
+  } catch (err) {
+    log(`import check failed for file ${fileId}: ${err.message}`);
+    return [];
+  }
+}
+
+export function doubtMessage(series, doubts) {
+  return {
+    title: `Check this: ${series}`,
+    body: [
+      ...doubts,
+      'Compare it in Jellyfin. If it is wrong, fix it in Sonarr › Series › the episode, or ask for help.',
+    ].join('\n'),
+  };
+}
+
 const batches = new Map();
 
-function flush(key) {
+async function flush(key) {
   const b = batches.get(key);
   if (!b) return;
   batches.delete(key);
   clearTimeout(b.timer);
   const msg = episodeMessage(b.series, b.upgrade, b.eps);
-  return publish({ ...msg, tags: 'tv' });
+  const doubts = (await Promise.all(b.checks)).flat();
+  await publish({ ...msg, tags: 'tv' });
+  if (doubts.length) await publish({ ...doubtMessage(b.series, doubts), tags: 'warning', priority: 'high' });
 }
 
-function addEpisodes(series, upgrade, eps) {
+function addEpisodes(series, upgrade, eps, check) {
   const key = `${series}\u0000${upgrade}`;
   const now = Date.now();
   let b = batches.get(key);
   if (!b) {
-    b = { series, upgrade, eps: [], first: now, timer: null };
+    b = { series, upgrade, eps: [], checks: [], first: now, timer: null };
     batches.set(key, b);
   }
   b.eps.push(...eps);
+  if (check) b.checks.push(check);
   clearTimeout(b.timer);
   const wait = Math.max(0, Math.min(QUIET_MS, b.first + MAX_MS - now));
   b.timer = setTimeout(() => flush(key), wait);
@@ -232,7 +363,8 @@ export async function handleArrEvent(v) {
     const titles = get('episodefile_episodetitles').split('|');
     const quality = get('episodefile_quality');
     addEpisodes(get('series_title') || 'Unknown series', upgrade,
-      (numbers.length ? numbers : ['?']).map((n, i) => ({ season, episode: n, title: titles[i] || '', quality })));
+      (numbers.length ? numbers : ['?']).map((n, i) => ({ season, episode: n, title: titles[i] || '', quality })),
+      checkImport(v));
     return { queued: true };
   }
 

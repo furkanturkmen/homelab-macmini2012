@@ -1,8 +1,8 @@
 /**
  * The wording of Sonarr and Radarr pushes, and the batching.
  *
- * Against a fake ntfy and a fake Radarr queue, because what matters is what
- * lands on the phone: how many pushes, and what they say.
+ * Against a fake ntfy, a fake Radarr queue and a fake Sonarr, because what
+ * matters is what lands on the phone: how many pushes, and what they say.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,6 +10,7 @@ import http from 'node:http';
 
 let ntfy;
 let radarr;
+let sonarr;
 let notify;
 const sent = [];
 
@@ -33,6 +34,13 @@ before(async () => {
       statusMessages: [{ title: 'x', messages: ['Found matching movie via grab history, but release was matched to movie by ID. Manual Import required.'] }],
     }] }));
   });
+  sonarr = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://x');
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify(fakeSonarr(url)));
+  });
+  process.env.SONARR_URL = `http://127.0.0.1:${await listen(sonarr)}`;
+  process.env.SONARR_API_KEY = 'key';
   process.env.NTFY_URL = `http://127.0.0.1:${await listen(ntfy)}`;
   process.env.NTFY_TOPIC = 'topic';
   process.env.RADARR_URL = `http://127.0.0.1:${await listen(radarr)}`;
@@ -44,7 +52,37 @@ before(async () => {
 after(() => {
   ntfy.close();
   radarr.close();
+  sonarr.close();
 });
+
+/*
+ * One anime as Sonarr sees it: 24-minute episodes 1-13, and an OVA it counts
+ * as number 11. File 201 is a normal episode, 202 a 3-minute extra filed as
+ * episode 2, 203 the release's 12 filed as episode 11 (it took 11 for the OVA).
+ */
+const EPISODES = [
+  { seasonNumber: 0, episodeNumber: 1, absoluteEpisodeNumber: 11, runtime: 25, episodeFileId: 0 },
+  ...Array.from({ length: 13 }, (_, i) => ({
+    seasonNumber: 1, episodeNumber: i + 1, absoluteEpisodeNumber: i + 1 < 11 ? i + 1 : i + 2, runtime: 24,
+    episodeFileId: { 1: 201, 2: 202, 11: 203 }[i + 1] ?? 0,
+  })),
+];
+const FILES = { 201: '24:10', 202: '3:05', 203: '24:30' };
+function fakeSonarr(url) {
+  const path = url.pathname.replace('/api/v3/', '');
+  if (path === 'episode') return EPISODES;
+  if (path === 'series/7') return { runtime: 24 };
+  if (path.startsWith('episodefile/')) return { mediaInfo: { runTime: FILES[path.split('/')[1]] } };
+  if (path === 'parse') {
+    const title = url.searchParams.get('title');
+    const se = /S(\d+)E(\d+)/.exec(title);
+    const abs = / - (\d+) /.exec(title);
+    return { parsedEpisodeInfo: se
+      ? { seasonNumber: +se[1], episodeNumbers: [+se[2]], absoluteEpisodeNumbers: [] }
+      : { episodeNumbers: [], absoluteEpisodeNumbers: abs ? [+abs[1]] : [] } };
+  }
+  return {};
+}
 
 const episode = (n, extra = {}) => ({
   sonarr_eventtype: 'Download',
@@ -123,4 +161,52 @@ test('events that are not imports are ignored', async () => {
   assert.deepEqual(await notify.handleArrEvent({ sonarr_eventtype: 'Grab' }), { ignored: 'Grab' });
   await assert.rejects(notify.handleArrEvent({}), /not a sonarr or radarr event/);
   assert.equal(sent.length, 0);
+});
+
+const imported = (fileId, n, source) => episode(n, {
+  sonarr_series_id: '7', sonarr_episodefile_id: String(fileId),
+  sonarr_episodefile_sourcepath: `/media/downloads/batch/${source}`,
+});
+
+test('minutes reads Sonarr run times', () => {
+  assert.equal(notify.minutes('24:30'), 24.5);
+  assert.equal(notify.minutes('1:11:00'), 71);
+  assert.equal(notify.minutes(''), null);
+});
+
+test('a file that fits its episode raises nothing', async () => {
+  sent.length = 0;
+  await notify.handleArrEvent(imported(201, 1, 'an anime - S01E01 [1080p].mkv'));
+  await notify.flushAll();
+  assert.equal(sent.length, 1, 'only the usual new-episode push');
+});
+
+test('a 3-minute extra filed as an episode is questioned', async () => {
+  sent.length = 0;
+  await notify.handleArrEvent(imported(202, 2, 'an anime Audio Dramas - S01E02.mkv'));
+  await notify.flushAll();
+  const doubt = sent.find(s => s.title === 'Check this: an anime');
+  assert.ok(doubt, 'a separate warning push');
+  assert.equal(doubt.priority, 'high');
+  assert.match(doubt.body, /S01E02: the file is 3 min, the episode should be about 24 min/);
+});
+
+test('straight-through numbering across a bonus episode is questioned', async () => {
+  sent.length = 0;
+  await notify.handleArrEvent(imported(203, 11, '[Group] an anime - 12 [1080p].mkv'));
+  await notify.flushAll();
+  const doubt = sent.find(s => s.title === 'Check this: an anime');
+  assert.ok(doubt);
+  assert.match(doubt.body, /this file is its 12/);
+  assert.match(doubt.body, /bonus episode S00E01 as number 11/);
+});
+
+test('straight-through numbering below the bonus episode is fine', () => {
+  assert.deepEqual(notify.importDoubts({ label: 'S01E05', fileMinutes: 24, expectedMinutes: 24,
+    straightNumbers: [5], bonus: [{ label: 'S00E01', number: 11 }] }), []);
+});
+
+test('a film-length file on one episode is questioned', () => {
+  const [doubt] = notify.importDoubts({ label: 'S01E01', fileMinutes: 71, expectedMinutes: 24 });
+  assert.match(doubt, /71 min.*about 24 min.*a film or several episodes/);
 });
