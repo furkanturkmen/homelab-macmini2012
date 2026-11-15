@@ -5,6 +5,11 @@
  * same shapes the real one uses. Movie 100 carries keyword 5, which the kid is
  * blocked on; movie 200 is clean; movie 300 answers slowly, to prove an
  * unchecked title is hidden until it has been checked.
+ *
+ * A fake Jellyfin holds each person's settings. "teen" has no keyword filter,
+ * only Jellyfin limits: PG-13, films without a rating blocked, no Anime
+ * library. Films 400-402 and series 500-502 are not in the library and are
+ * predicted; films 600 and 601 are, and Jellyfin decides them itself.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,14 +29,31 @@ const USERS = {
   1: { id: 1, permissions: 2, jellyfinUserId: 'self', displayName: 'furkan' },
   3: { id: 3, permissions: 32, jellyfinUserId: 'kid', displayName: 'robin' },
   9: { id: 9, permissions: 0, jellyfinUserId: null, displayName: 'filter-canary' },
+  4: { id: 4, permissions: 32, jellyfinUserId: 'teen', displayName: 'sam' },
+  5: { id: 5, permissions: 32, jellyfinUserId: 'broken', displayName: 'alex' },
 };
-const SESSIONS = { adminsid: 1, kidsid: 3 };
-const KEYWORDS = { 100: [5], 200: [7], 300: [], 301: [] };
+const SESSIONS = { adminsid: 1, kidsid: 3, teensid: 4, brokensid: 5 };
+const KEYWORDS = { 100: [5], 200: [7], 300: [], 301: [], 400: [], 401: [], 402: [], 600: [], 601: [] };
+const ANIME = 210024;
+const TV_KEYWORDS = { 500: [ANIME], 501: [], 502: [] };
+// US ratings; a missing entry is a title without one.
+const CERTS = { 400: 'R', 401: 'PG', 600: 'R', 601: 'PG', 500: 'TV-PG', 501: 'TV-14', 502: 'TV-PG' };
+
+const JF_POLICIES = {
+  self: { IsAdministrator: true, EnableAllFolders: true },
+  kid: { EnableAllFolders: true, BlockedTags: [], BlockUnratedItems: [] },
+  teen: { EnableAllFolders: false, EnabledFolders: ['lib-movies', 'lib-tv'], MaxParentalRating: 13, BlockUnratedItems: ['Movie'], BlockedTags: [] },
+};
+// What Jellyfin lists per person. 600 is R but the library shows it to teen
+// (say, an exception in Jellyfin); 601 is PG but Jellyfin hides it from teen.
+const JF_LIBRARY = [600, 601];
+const JF_VISIBLE = { teen: [600] };
 
 let dir;
 let storePath;
 let seerr;
 let push;
+let jf;
 let guard;
 let base;
 const seen = { requests: [], settingsPosts: [], pushPuts: [], logouts: [] };
@@ -113,8 +135,17 @@ function fakeSeerr() {
       const id = Number(m[1]);
       if (!(id in KEYWORDS)) return json(res, 404, { message: 'not found' });
       if (id === 300 || id === 301) await new Promise((r) => setTimeout(r, 1500));
-      return json(res, 200, { id, title: `Movie ${id}`, keywords: KEYWORDS[id].map((k) => ({ id: k, name: `kw${k}` })) });
+      const releases = { results: CERTS[id] ? [{ iso_3166_1: 'US', release_dates: [{ certification: CERTS[id] }] }] : [] };
+      return json(res, 200, { id, title: `Movie ${id}`, releases, keywords: KEYWORDS[id].map((k) => ({ id: k, name: `kw${k}` })) });
     }
+    if ((m = /^\/api\/v1\/tv\/(\d+)$/.exec(p))) {
+      const id = Number(m[1]);
+      if (!(id in TV_KEYWORDS)) return json(res, 404, { message: 'not found' });
+      const contentRatings = { results: CERTS[id] ? [{ iso_3166_1: 'US', rating: CERTS[id] }] : [] };
+      return json(res, 200, { id, name: `Show ${id}`, contentRatings, keywords: TV_KEYWORDS[id].map((k) => ({ id: k, name: `kw${k}` })) });
+    }
+    if (p === '/api/v1/settings/radarr') return json(res, 200, [{ isDefault: true, is4k: false, activeDirectory: '/media/movies' }]);
+    if (p === '/api/v1/settings/sonarr') return json(res, 200, [{ isDefault: true, is4k: false, activeDirectory: '/media/tv', activeAnimeDirectory: '/media/anime' }]);
     if ((m = /^\/api\/v1\/movie\/(\d+)\/recommendations$/.exec(p))) {
       return json(res, 200, { page: 1, totalResults: 2, results: [{ id: 100, mediaType: 'movie' }, { id: 200, mediaType: 'movie' }] });
     }
@@ -128,6 +159,12 @@ function fakeSeerr() {
           { id: 31, mediaType: 'person', knownFor: [{ id: 100, mediaType: 'movie' }, { id: 200, mediaType: 'movie' }] },
         ],
       });
+    }
+    if (p === '/api/v1/search' && url.searchParams.get('query') === 'teen') {
+      return json(res, 200, { page: 1, results: [
+        ...[400, 401, 402, 600, 601].map((id) => ({ id, mediaType: 'movie' })),
+        ...[500, 501, 502].map((id) => ({ id, mediaType: 'tv' })),
+      ] });
     }
     if (p === '/api/v1/search') return json(res, 200, SEARCH_BODY, req);
     if (p === '/api/v1/discover/movies') return json(res, 200, { results: [{ id: 200, mediaType: 'movie' }, { id: 301, mediaType: 'movie' }] });
@@ -170,6 +207,43 @@ function fakePush() {
   });
 }
 
+function fakeJellyfin() {
+  return http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://x');
+    const p = url.pathname;
+    if (req.headers.authorization !== 'MediaBrowser Token="jf-key"') return json(res, 401, {});
+    let m;
+    if (p === '/Localization/ParentalRatings') {
+      return json(res, 200, [
+        { Name: 'Unrated' },
+        { Name: 'PG', Value: 10, RatingScore: { score: 10, subScore: 0 } },
+        { Name: 'TV-PG', Value: 10, RatingScore: { score: 10, subScore: 0 } },
+        { Name: 'PG-13', Value: 13, RatingScore: { score: 13, subScore: 0 } },
+        { Name: 'TV-14', Value: 14, RatingScore: { score: 14, subScore: 0 } },
+        { Name: 'R', Value: 17, RatingScore: { score: 17, subScore: 0 } },
+      ]);
+    }
+    if (p === '/Library/VirtualFolders') {
+      return json(res, 200, [
+        { Name: 'Movies', ItemId: 'lib-movies', Locations: ['/media/movies'] },
+        { Name: 'TV Shows', ItemId: 'lib-tv', Locations: ['/media/tv'] },
+        { Name: 'Anime', ItemId: 'lib-anime', Locations: ['/media/anime/'] },
+      ]);
+    }
+    if (p === '/System/Configuration') return json(res, 200, { MetadataCountryCode: 'US' });
+    if ((m = /^\/Users\/([^/]+)$/.exec(p))) {
+      if (m[1] === 'broken') return json(res, 500, {});
+      return JF_POLICIES[m[1]] ? json(res, 200, { Id: m[1], Policy: JF_POLICIES[m[1]] }) : json(res, 404, {});
+    }
+    if (p === '/Items') {
+      const who = url.searchParams.get('userId');
+      const list = who ? (JF_VISIBLE[who] ?? JF_LIBRARY) : JF_LIBRARY;
+      return json(res, 200, { Items: list.map((id) => ({ Type: 'Movie', ProviderIds: { Tmdb: String(id) } })) });
+    }
+    return json(res, 404, {});
+  });
+}
+
 const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 
 before(async () => {
@@ -178,8 +252,10 @@ before(async () => {
   await writeFile(storePath, JSON.stringify(baseStore()));
   seerr = fakeSeerr();
   push = fakePush();
+  jf = fakeJellyfin();
   const seerrPort = await listen(seerr);
   const pushPort = await listen(push);
+  const jfPort = await listen(jf);
   const probe = http.createServer();
   const guardPort = await listen(probe);
   await new Promise((r) => probe.close(r));
@@ -198,6 +274,8 @@ before(async () => {
       RELAY_NETWORKS: '172.31.77.0/24',
       LOOKUP_BUDGET_MS: '500',
       STORE_RECHECK_MS: '50',
+      JELLYFIN_URL: `http://127.0.0.1:${jfPort}`,
+      JELLYFIN_API_KEY: 'jf-key',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -218,6 +296,7 @@ after(async () => {
   guard?.kill();
   await new Promise((r) => seerr.close(r));
   await new Promise((r) => push.close(r));
+  await new Promise((r) => jf.close(r));
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -425,4 +504,48 @@ test('internal endpoints refuse proxied callers', async () => {
   const health = await (await get('/__guard/health')).json();
   assert.equal(health.ok, true);
   assert.equal(health.mode, 'enforce');
+});
+
+const keysOf = (body) => body.results.map((r) => `${r.mediaType}:${r.id}`).sort();
+
+test('Jellyfin limits apply in Seerr to someone with no keyword filter', async () => {
+  // The first answer may still be waiting on lookups; the second has them.
+  await get('/api/v1/search?query=teen', as('teen'));
+  await new Promise((r) => setTimeout(r, 600));
+  const seen = await (await get('/api/v1/search?query=teen', as('teen'))).json();
+  assert.deepEqual(keysOf(seen), ['movie:401', 'movie:600', 'tv:502'],
+    'the R film, the unrated film, the anime, the TV-14 series and the film Jellyfin hides are gone');
+  assert.equal((await get('/api/v1/movie/400', as('teen'))).status, 404, 'R is above the PG-13 cap');
+  assert.equal((await get('/api/v1/movie/402', as('teen'))).status, 404, 'no rating, and unrated films are blocked');
+  assert.equal((await get('/api/v1/tv/500', as('teen'))).status, 404, 'anime: the Anime library is not theirs');
+  assert.equal((await get('/api/v1/tv/501', as('teen'))).status, 404, 'TV-14 is above the cap');
+  assert.equal((await get('/api/v1/movie/401', as('teen'))).status, 200);
+  assert.equal((await get('/api/v1/tv/502', as('teen'))).status, 200, 'unrated series are not blocked for them');
+});
+
+test('a title already in the library is decided by Jellyfin, not predicted', async () => {
+  assert.equal((await get('/api/v1/movie/600', as('teen'))).status, 200, 'rated R, but Jellyfin shows it to them');
+  assert.equal((await get('/api/v1/movie/601', as('teen'))).status, 404, 'rated PG, but Jellyfin hides it from them');
+});
+
+test('a request beyond someone\'s Jellyfin limits is refused', async () => {
+  const before = seen.requests.length;
+  const res = await fetch(`${base}/api/v1/request`, {
+    method: 'POST',
+    headers: { ...as('teen'), 'content-type': 'application/json' },
+    body: JSON.stringify({ mediaType: 'movie', mediaId: 400 }),
+  });
+  assert.equal(res.status, 403);
+  assert.equal(seen.requests.length, before, 'it never reached Seerr');
+});
+
+test('someone Jellyfin limits in no way sees every title', async () => {
+  const all = await (await get('/api/v1/search?query=teen', as('admin'))).json();
+  assert.equal(all.results.length, 8);
+});
+
+test('when Jellyfin cannot say what someone may see, they get nothing rather than everything', async () => {
+  const res = await get('/api/v1/search?query=teen', as('broken'));
+  assert.equal(res.status, 503);
+  assert.equal(res.headers.get('x-seerr-guard'), 'unavailable');
 });

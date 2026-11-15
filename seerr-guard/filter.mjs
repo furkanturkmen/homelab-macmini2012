@@ -487,3 +487,131 @@ export function viaRelay(remoteAddress, headers, internalRanges, relayRanges) {
   const last = xff.split(',').pop().trim();
   return addressIn(last, relayRanges);
 }
+
+/* ------------------------------------------------ the person's Jellyfin rules */
+
+/*
+ * Jellyfin already knows more about a person than their keywords: the highest
+ * age rating they may see, whether titles without a rating are hidden, and
+ * which libraries they can open. Seerr knows none of it, so a child limited to
+ * PG-13 could find and request an R-rated film, and someone without the Anime
+ * library could request anime - both then download and never appear for them.
+ *
+ * These rules are the same three, applied to a title Seerr shows. A title the
+ * library already holds is not decided here at all: guard.mjs asks Jellyfin
+ * whether this person can see it, which is exact. These rules are for the
+ * rest, predicted the way Jellyfin will see the title once it arrives.
+ */
+
+/** TMDB's keyword for anime. Seerr itself sends a series with it to the anime folder. */
+export const ANIME_KEYWORD = 210024;
+
+/**
+ * The rating Jellyfin's TMDB provider will store for a title, or null.
+ *
+ * Same choice as the provider: the metadata country's entry, else the US one,
+ * and for a film the first release date's certification. Another country's
+ * rating gets that country as a prefix ("DE-16"), as Jellyfin writes it.
+ */
+export function certificationOf(body, country = 'US') {
+  const pick = (rows, code) => (rows ?? []).find((r) => r?.iso_3166_1 === code);
+  const prefix = (code) => (code === 'US' ? '' : `${code}-`);
+  const releases = body?.releases?.results;
+  if (Array.isArray(releases)) {
+    for (const code of country === 'US' ? ['US'] : [country, 'US']) {
+      const row = pick(releases, code);
+      if (row) {
+        const cert = String(row.release_dates?.[0]?.certification ?? '').trim();
+        return cert ? `${prefix(code)}${cert}` : null;
+      }
+    }
+    return null;
+  }
+  const ratings = body?.contentRatings?.results;
+  if (Array.isArray(ratings)) {
+    for (const code of country === 'US' ? ['US'] : [country, 'US']) {
+      const row = pick(ratings, code);
+      if (row) {
+        const cert = String(row.rating ?? '').trim();
+        return cert ? `${prefix(code)}${cert}` : null;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Jellyfin's parental rating table (/Localization/ParentalRatings) as a
+ * lookup: lower-cased name -> { score, sub }. "Unrated" has no score and is
+ * left out, so it reads as unrated, which is what it is.
+ */
+export function ratingTable(rows) {
+  const table = new Map();
+  for (const r of rows ?? []) {
+    const score = r?.RatingScore?.score ?? r?.Value;
+    if (r?.Name && Number.isFinite(score)) {
+      table.set(String(r.Name).toLowerCase(), { score, sub: r?.RatingScore?.subScore ?? null });
+    }
+  }
+  return table;
+}
+
+/** A rating's score, or null when Jellyfin would not recognise it (which it treats as unrated). */
+export function ratingScore(cert, table) {
+  if (!cert) return null;
+  return table.get(String(cert).toLowerCase()) ?? null;
+}
+
+/**
+ * Whether a Jellyfin user policy limits what its owner sees at all. Someone it
+ * does not limit costs nothing extra: no lookups, the plain proxy as before.
+ */
+export function isRestricted(policy) {
+  if (!policy || policy.IsAdministrator) return false;
+  return !policy.EnableAllFolders
+    || (policy.BlockedMediaFolders ?? []).length > 0
+    || (policy.BlockUnratedItems ?? []).length > 0
+    || Number.isFinite(policy.MaxParentalRating)
+    || (policy.BlockedTags ?? []).length > 0
+    || (policy.AllowedTags ?? []).length > 0;
+}
+
+/**
+ * The Jellyfin library a title will land in, from where Seerr sends it:
+ * films to Radarr's folder, anime series to Sonarr's anime folder, other
+ * series to Sonarr's folder. `folders` maps movie / tv / anime to a library id.
+ */
+export function libraryOf(type, keywords, folders) {
+  if (type === 'movie') return folders?.movie ?? null;
+  if ((keywords ?? []).includes(ANIME_KEYWORD) && folders?.anime) return folders.anime;
+  return folders?.tv ?? null;
+}
+
+/**
+ * Why a person's Jellyfin settings would hide a title they do not have yet,
+ * or null. `title` is { type, keywords, cert }; `setup` is { ratings, folders }.
+ *
+ * The comparison is Jellyfin's: a rating above the cap is hidden, at the cap
+ * only when its sub-score is above a sub-cap that is set. An unknown library
+ * hides nothing - an unexpected folder layout must not hide everything.
+ */
+export function ruleHides(policy, title, setup) {
+  if (!isRestricted(policy)) return null;
+  const library = libraryOf(title.type, title.keywords, setup.folders);
+  if (library) {
+    if ((policy.BlockedMediaFolders ?? []).includes(library)) return 'library';
+    if (!policy.EnableAllFolders && !(policy.EnabledFolders ?? []).includes(library)) return 'library';
+  }
+  const rating = ratingScore(title.cert, setup.ratings);
+  if (!rating) {
+    const kind = title.type === 'movie' ? 'Movie' : 'Series';
+    return (policy.BlockUnratedItems ?? []).includes(kind) ? 'unrated' : null;
+  }
+  const cap = policy.MaxParentalRating;
+  if (Number.isFinite(cap)) {
+    if (rating.score > cap) return 'rating';
+    const subCap = policy.MaxParentalSubRating;
+    if (rating.score === cap && Number.isFinite(subCap) && (rating.sub ?? 0) > subCap) return 'rating';
+  }
+  return null;
+}

@@ -33,10 +33,31 @@ jellylab-push ──> Seerr directly (API key) ──> Jellyfin BlockedTags, per
 Decisions come from the keywords Seerr's own detail endpoint returns (cached for
 30 days), so no TMDB key of its own is needed.
 
+**Jellyfin's own limits count in Seerr too.** A person's Jellyfin settings
+(Dashboard › Users › the person › *Parental control* and *Access*) also apply
+in Seerr, with or without a keyword filter:
+
+- **Maximum allowed parental rating**: anything rated above it is hidden.
+- **Block items with no or unrecognized rating**: ticked for Movies or Shows,
+  titles of that kind without a rating are hidden.
+- **Library access**: a title that would land in a library they cannot open is
+  hidden. Films go to Radarr's folder, anime series to Sonarr's anime folder,
+  other series to Sonarr's folder, matched to the Jellyfin library holding it.
+
+A title already in the library is decided by Jellyfin itself: hidden in Seerr
+exactly when Jellyfin hides it from that person, whatever the reason (rating,
+library, blocked tags). Other titles are predicted from their US rating on
+TMDB, as Jellyfin will store it. Without this, someone limited to PG-13 could
+request an R-rated film, or someone without the Anime library could request
+anime, and it would download and never appear for them.
+
+This needs `JELLYFIN_API_KEY` in `.env` (Dashboard › API Keys). Settings are
+reread every minute.
+
 **It fails closed.** A title that has not been checked yet, a store file that
-exists but cannot be parsed, or a caller Seerr cannot identify all mean
-*hidden* for anyone who might be filtered. A missing store file means no filters
-at all.
+exists but cannot be parsed, a caller Seerr cannot identify, or Jellyfin not
+answering for a person all mean *hidden* for anyone who might be filtered. A
+missing store file means no filters at all.
 
 ## Why not Seerr's own blocklist
 

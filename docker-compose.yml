@@ -633,6 +633,11 @@ services:
       SEERR_API_KEY: "${JELLYSEERR_API_KEY}"
       PUSH_URL: "http://jellylab-push:8099"
       FILTER_STORE_SECRET: "${FILTER_STORE_SECRET}"
+      # Each person's Jellyfin settings: age limit, "block unrated" and which
+      # libraries they can open. Seerr hides what Jellyfin would hide, so nobody
+      # can request something that then never shows up for them.
+      JELLYFIN_URL: "http://jellyfin:8096"
+      JELLYFIN_API_KEY: "${JELLYFIN_API_KEY}"
       # Where /__guard/canary and /__guard/decide may be called from: the
       # default Docker network (Uptime Kuma) and the container itself.
       INTERNAL_NETWORKS: "172.18.0.0/16,127.0.0.1/32"

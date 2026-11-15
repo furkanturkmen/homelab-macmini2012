@@ -6,6 +6,7 @@ import {
   classify, rowKey, collectKeys, filterBody, singleTitleKey, detailKeywords, makeHider,
   filterCollectionProps, rewriteNextData, buildIdOf, mergeSettings, splitSettings,
   allowedChanges, parseCidrs, isInternalPeer, isPrivileged, addressIn, viaRelay,
+  ANIME_KEYWORD, certificationOf, ratingTable, ratingScore, isRestricted, libraryOf, ruleHides,
 } from '../filter.mjs';
 
 const ADULT = [256466, 155477, 195669, 198385, 356759, 341367];
@@ -244,4 +245,79 @@ test('viaRelay trusts only the last forwarded address, and only from inside Dock
   assert.equal(viaRelay('172.18.0.14', {}, internal, relay), false);
   assert.equal(viaRelay('172.18.0.14', { 'x-forwarded-for': '172.31.77.2' }, internal, []), false, 'off unless configured');
   assert.equal(addressIn('::1', internal), true);
+});
+
+/* ------------------------------------------------ the person's Jellyfin rules */
+
+// The shape of Jellyfin's /Localization/ParentalRatings, trimmed.
+const RATINGS = ratingTable([
+  { Name: 'Unrated' },
+  { Name: 'G', Value: 0, RatingScore: { score: 0, subScore: 0 } },
+  { Name: 'PG', Value: 10, RatingScore: { score: 10, subScore: 0 } },
+  { Name: 'TV-PG', Value: 10, RatingScore: { score: 10, subScore: 0 } },
+  { Name: 'PG-13', Value: 13, RatingScore: { score: 13, subScore: 0 } },
+  { Name: 'TV-14', Value: 14, RatingScore: { score: 14, subScore: 0 } },
+  { Name: 'R', Value: 17, RatingScore: { score: 17, subScore: 0 } },
+  { Name: 'NC-17', Value: 17, RatingScore: { score: 17, subScore: 1 } },
+  { Name: 'TV-MA', Value: 17, RatingScore: { score: 17, subScore: 1 } },
+]);
+const SETUP = { ratings: RATINGS, folders: { movie: 'lib-movies', tv: 'lib-tv', anime: 'lib-anime' } };
+const TEEN = { EnableAllFolders: false, EnabledFolders: ['lib-movies', 'lib-tv'], MaxParentalRating: 13, BlockUnratedItems: ['Movie'] };
+const film = (cert, keywords = []) => ({ type: 'movie', keywords, cert });
+const series = (cert, keywords = []) => ({ type: 'tv', keywords, cert });
+
+test('certificationOf picks the rating Jellyfin will store', () => {
+  const movie = { releases: { results: [
+    { iso_3166_1: 'DE', release_dates: [{ certification: '16' }] },
+    { iso_3166_1: 'US', release_dates: [{ certification: 'NC-17' }, { certification: 'R' }] },
+  ] } };
+  assert.equal(certificationOf(movie, 'US'), 'NC-17', "the US entry's first release date");
+  assert.equal(certificationOf(movie, 'DE'), 'DE-16', 'another country is prefixed, as Jellyfin writes it');
+  assert.equal(certificationOf(movie, 'NL'), 'NC-17', 'no entry for the country falls back to the US');
+  assert.equal(certificationOf({ releases: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: '' }] }] } }), null, 'an empty certification is unrated');
+  assert.equal(certificationOf({ releases: { results: [] } }), null);
+  const show = { contentRatings: { results: [{ iso_3166_1: 'DE', rating: '16' }, { iso_3166_1: 'US', rating: 'TV-MA' }] } };
+  assert.equal(certificationOf(show, 'US'), 'TV-MA');
+  assert.equal(certificationOf({ keywords: [] }), null, 'no rating data at all');
+});
+
+test('ratingScore reads Jellyfin\'s table; unknown or missing reads as unrated', () => {
+  assert.deepEqual(ratingScore('PG-13', RATINGS), { score: 13, sub: 0 });
+  assert.deepEqual(ratingScore('tv-ma', RATINGS), { score: 17, sub: 1 }, 'case does not matter');
+  assert.equal(ratingScore('Unrated', RATINGS), null);
+  assert.equal(ratingScore('DE-16', RATINGS), null, 'not in the table, so Jellyfin calls it unrated');
+  assert.equal(ratingScore(null, RATINGS), null);
+});
+
+test('isRestricted is false for someone Jellyfin limits in no way', () => {
+  assert.equal(isRestricted({ EnableAllFolders: true, BlockedTags: [], BlockUnratedItems: [] }), false);
+  assert.equal(isRestricted({ IsAdministrator: true, EnableAllFolders: false }), false);
+  assert.equal(isRestricted(null), false);
+  assert.equal(isRestricted({ EnableAllFolders: true, MaxParentalRating: 13 }), true);
+  assert.equal(isRestricted({ EnableAllFolders: true, BlockUnratedItems: ['Movie'] }), true);
+  assert.equal(isRestricted({ EnableAllFolders: false, EnabledFolders: ['a'] }), true);
+  assert.equal(isRestricted({ EnableAllFolders: true, BlockedTags: ['harem'] }), true);
+});
+
+test('libraryOf follows Seerr\'s routing: anime series to the anime folder only', () => {
+  assert.equal(libraryOf('movie', [ANIME_KEYWORD], SETUP.folders), 'lib-movies', 'anime films go with the films');
+  assert.equal(libraryOf('tv', [ANIME_KEYWORD], SETUP.folders), 'lib-anime');
+  assert.equal(libraryOf('tv', [1], SETUP.folders), 'lib-tv');
+  assert.equal(libraryOf('tv', [ANIME_KEYWORD], { tv: 'lib-tv' }), 'lib-tv', 'no anime folder: series go to the series library');
+});
+
+test('ruleHides: age cap, unrated and libraries, the way Jellyfin decides them', () => {
+  assert.equal(ruleHides(TEEN, film('PG'), SETUP), null);
+  assert.equal(ruleHides(TEEN, film('PG-13'), SETUP), null, 'at the cap is allowed');
+  assert.equal(ruleHides(TEEN, film('R'), SETUP), 'rating');
+  assert.equal(ruleHides(TEEN, series('TV-14'), SETUP), 'rating');
+  assert.equal(ruleHides(TEEN, film(null), SETUP), 'unrated', 'films without a rating are blocked for this person');
+  assert.equal(ruleHides(TEEN, series(null), SETUP), null, 'series without one are not');
+  assert.equal(ruleHides(TEEN, series('TV-PG', [ANIME_KEYWORD]), SETUP), 'library', 'anime would land in a library they cannot open');
+  assert.equal(ruleHides({ ...TEEN, MaxParentalRating: 17 }, film('NC-17'), SETUP), null, 'no sub-cap: the whole score counts');
+  assert.equal(ruleHides({ ...TEEN, MaxParentalRating: 17, MaxParentalSubRating: 0 }, film('NC-17'), SETUP), 'rating', 'R allowed, NC-17 not');
+  assert.equal(ruleHides({ ...TEEN, MaxParentalRating: 17, MaxParentalSubRating: 0 }, film('R'), SETUP), null);
+  assert.equal(ruleHides(TEEN, series('TV-PG', [ANIME_KEYWORD]), { ratings: RATINGS, folders: {} }), null, 'an unknown library hides nothing');
+  assert.equal(ruleHides({ EnableAllFolders: true }, film('NC-17'), SETUP), null, 'nobody limited, nothing hidden');
+  assert.equal(ruleHides({ ...TEEN, EnableAllFolders: true, BlockedMediaFolders: ['lib-movies'] }, film('PG'), SETUP), 'library');
 });

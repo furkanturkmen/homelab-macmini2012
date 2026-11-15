@@ -34,6 +34,7 @@ import {
   collectKeys, filterBody, singleTitleKey, detailKeywords, makeHider,
   filterCollectionProps, rewriteNextData, buildIdOf, mergeSettings, splitSettings,
   allowedChanges, parseCidrs, isInternalPeer, rowKey, isPrivileged, viaRelay,
+  certificationOf, ratingTable, isRestricted, ruleHides,
 } from './filter.mjs';
 
 const {
@@ -53,6 +54,14 @@ const {
   RELAY_NETWORKS = '',
   LOOKUP_BUDGET_MS = '3000',
   STORE_RECHECK_MS = '2000',
+  // Jellyfin, for each person's age cap, unrated setting and libraries. Without
+  // a key only the keyword filters apply, as before.
+  JELLYFIN_URL = 'http://jellyfin:8096',
+  JELLYFIN_API_KEY = '',
+  // How long a person's Jellyfin settings and what they can see are trusted,
+  // and how long the library layout and rating table are.
+  PERSON_RECHECK_MS = '60000',
+  SETUP_RECHECK_MS = '300000',
 } = process.env;
 
 const SHADOW = GUARD_MODE === 'shadow';
@@ -289,20 +298,29 @@ async function putStore(jellyfinUserId, changes) {
 /* ================================================================== verdicts */
 
 /*
- * A title's TMDB keyword ids, keyed `movie:603`. Keywords on a title almost
- * never change, so a verdict is trusted for 30 days and a stale one is still
+ * A title's TMDB keyword ids and its age rating, keyed `movie:603`. Neither
+ * changes often, so a verdict is trusted for 30 days and a stale one is still
  * used while it is refreshed in the background. Persisted, so a restart does
  * not make every page slow again.
+ *
+ * `cert` is the rating Jellyfin will give the title, or null for none. An entry
+ * saved before ratings were kept has no `cert` at all and counts as unchecked,
+ * so it is looked up again rather than read as "unrated".
  */
 const verdicts = new Map();
 const inflight = new Map();
 let cacheDirty = false;
+// The country Jellyfin rates titles for. Read from Jellyfin with the rest of
+// its setup; US until then, which is also Jellyfin's own fallback.
+let ratingCountry = 'US';
 
 async function loadCache() {
   try {
     const doc = JSON.parse(await readFile(CACHE_PATH, 'utf8'));
     for (const [key, v] of Object.entries(doc.entries ?? {})) {
-      if (Array.isArray(v.k) && Number.isFinite(v.at)) verdicts.set(key, { keywords: v.k, at: v.at, ttl: v.ttl ?? TTL_KNOWN });
+      if (Array.isArray(v.k) && Number.isFinite(v.at)) {
+        verdicts.set(key, { keywords: v.k, cert: 'c' in v ? v.c : undefined, at: v.at, ttl: v.ttl ?? TTL_KNOWN });
+      }
     }
     log(`keyword cache: ${verdicts.size} titles`);
   } catch (err) {
@@ -314,7 +332,9 @@ async function saveCache() {
   if (!cacheDirty) return;
   cacheDirty = false;
   const entries = {};
-  for (const [key, v] of verdicts) entries[key] = { k: v.keywords, at: v.at, ttl: v.ttl };
+  for (const [key, v] of verdicts) {
+    entries[key] = v.cert === undefined ? { k: v.keywords, at: v.at, ttl: v.ttl } : { k: v.keywords, c: v.cert, at: v.at, ttl: v.ttl };
+  }
   try {
     await mkdir(dirname(CACHE_PATH), { recursive: true });
     const tmp = `${CACHE_PATH}.tmp`;
@@ -326,8 +346,8 @@ async function saveCache() {
   }
 }
 
-function remember(key, keywords, ttl = TTL_KNOWN) {
-  verdicts.set(key, { keywords, at: Date.now(), ttl });
+function remember(key, keywords, cert, ttl = TTL_KNOWN) {
+  verdicts.set(key, { keywords, cert: cert ?? null, at: Date.now(), ttl });
   cacheDirty = true;
 }
 
@@ -354,13 +374,14 @@ function lookup(key) {
       signal: AbortSignal.timeout(10000),
     });
     if (res.status === 404) {
-      remember(key, [], TTL_MISSING);
+      remember(key, [], null, TTL_MISSING);
       return [];
     }
     if (!res.ok) throw new Error(`seerr /${type}/${id} -> ${res.status}`);
-    const keywords = detailKeywords(await res.json());
+    const body = await res.json();
+    const keywords = detailKeywords(body);
     if (keywords === null) throw new Error(`seerr /${type}/${id} has no keywords field`);
-    remember(key, keywords);
+    remember(key, keywords, certificationOf(body, ratingCountry));
     return keywords;
   }).finally(() => inflight.delete(key));
   inflight.set(key, promise);
@@ -368,12 +389,25 @@ function lookup(key) {
   return promise;
 }
 
-/** Known keywords for a title (stale allowed), refreshing expired ones in the background. */
+/**
+ * Known keywords for a title (stale allowed), refreshing expired ones in the
+ * background. An entry from before ratings were kept is unknown until it has
+ * been looked up again.
+ */
 function verdictOf(key) {
   const v = verdicts.get(key);
   if (!v) return undefined;
+  if (v.cert === undefined) {
+    if (!inflight.has(key)) lookup(key).catch(() => {});
+    return undefined;
+  }
   if (Date.now() - v.at > v.ttl && !inflight.has(key)) lookup(key).catch(() => {});
   return v.keywords;
+}
+
+/** The rating Jellyfin will give a title: a name, null for none, undefined when not checked yet. */
+function certOf(key) {
+  return verdictOf(key) === undefined ? undefined : verdicts.get(key).cert;
 }
 
 const verdictView = { get: verdictOf };
@@ -454,6 +488,137 @@ async function resolveUser(req) {
   return user;
 }
 
+/* ==================================================== people's Jellyfin rules */
+
+/*
+ * What Jellyfin hides from a person beyond their keywords: an age cap,
+ * unrated titles, libraries they cannot open, tags blocked by hand. Seerr knows
+ * none of it, so without this a child capped at PG-13 could request an R-rated
+ * film and someone without the Anime library could request anime, and both
+ * would download and never appear for them.
+ *
+ * A title the library already holds is decided by Jellyfin itself: it is
+ * hidden here exactly when Jellyfin does not list it for that person. Other
+ * titles are predicted with filter.mjs's ruleHides from their TMDB rating and
+ * where Seerr would send them.
+ *
+ * A person whose settings cannot be read is withheld from (503), unless a
+ * reading from the last day is at hand, like the filter store: guessing
+ * "unrestricted" for a child is the one wrong answer.
+ */
+const PERSON_TTL = Number(PERSON_RECHECK_MS) || 60000;
+const SETUP_TTL = Number(SETUP_RECHECK_MS) || 300000;
+const STALE_LIMIT = DAY;
+
+async function jellyfin(path) {
+  const res = await fetch(`${JELLYFIN_URL}${path}`, {
+    headers: { authorization: `MediaBrowser Token="${JELLYFIN_API_KEY}"` },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`jellyfin ${path.split('?')[0]} -> ${res.status}`);
+  return res.json();
+}
+
+async function seerrSettings(path) {
+  const res = await fetch(`${SEERR_URL}/api/v1/settings/${path}`, {
+    headers: { 'x-api-key': SEERR_API_KEY },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`seerr settings/${path} -> ${res.status}`);
+  return res.json();
+}
+
+/** The library's TMDB keys, for knowing which titles Jellyfin can decide. */
+const libraryKeys = (items) => new Set((items ?? [])
+  .filter((i) => (i.Type === 'Movie' || i.Type === 'Series') && i.ProviderIds?.Tmdb)
+  .map((i) => keyOf(i.Type === 'Movie' ? 'movie' : 'tv', i.ProviderIds.Tmdb)));
+
+const TITLES_QUERY = 'Recursive=true&IncludeItemTypes=Movie,Series&Fields=ProviderIds&Limit=100000';
+
+let setup = { at: 0, value: null };
+
+/**
+ * Rating table, library ids by kind, and the titles the library holds.
+ *
+ * Which library a title lands in comes from Seerr's own routing: the default
+ * Radarr and Sonarr folders, matched to the Jellyfin library that has that
+ * folder. A folder no library has is left unknown and hides nothing.
+ */
+async function jellyfinSetup() {
+  if (setup.value && Date.now() - setup.at < SETUP_TTL) return setup.value;
+  try {
+    const [ratings, libraries, items, config, radarr, sonarr] = await Promise.all([
+      jellyfin('/Localization/ParentalRatings'),
+      jellyfin('/Library/VirtualFolders'),
+      jellyfin(`/Items?${TITLES_QUERY}`),
+      jellyfin('/System/Configuration'),
+      seerrSettings('radarr'),
+      seerrSettings('sonarr'),
+    ]);
+    const libraryFor = (folder) => {
+      if (!folder) return null;
+      const clean = String(folder).replace(/\/+$/, '');
+      return libraries.find((l) => (l.Locations ?? []).some((p) => String(p).replace(/\/+$/, '') === clean))?.ItemId ?? null;
+    };
+    const main = (servers) => servers.find((s) => s.isDefault && !s.is4k) ?? servers[0] ?? {};
+    const folders = {
+      movie: libraryFor(main(radarr).activeDirectory),
+      tv: libraryFor(main(sonarr).activeDirectory),
+      anime: libraryFor(main(sonarr).activeAnimeDirectory),
+    };
+    for (const [kind, id] of Object.entries(folders)) {
+      if (!id) log(`no Jellyfin library holds Seerr's ${kind} folder; that library check is skipped`);
+    }
+    ratingCountry = config.MetadataCountryCode || 'US';
+    setup = { at: Date.now(), value: { ratings: ratingTable(ratings), folders, owned: libraryKeys(items.Items) } };
+  } catch (err) {
+    if (!setup.value || Date.now() - setup.at > STALE_LIMIT) throw err;
+    log(`jellyfin setup unavailable, using the one from ${new Date(setup.at).toISOString()}: ${err.message}`);
+  }
+  return setup.value;
+}
+
+const people = new Map();
+
+/**
+ * A person's Jellyfin rules, or null when Jellyfin limits nothing for them.
+ * { policy, visible, setup }: visible is what Jellyfin lists for them.
+ */
+async function personRules(jellyfinUserId) {
+  const cached = people.get(jellyfinUserId);
+  if (cached && Date.now() - cached.at < PERSON_TTL) return cached.value;
+  try {
+    const user = await jellyfin(`/Users/${encodeURIComponent(jellyfinUserId)}`);
+    let value = null;
+    if (isRestricted(user.Policy)) {
+      const [items, base] = await Promise.all([
+        jellyfin(`/Items?userId=${encodeURIComponent(jellyfinUserId)}&${TITLES_QUERY}`),
+        jellyfinSetup(),
+      ]);
+      value = { policy: user.Policy, visible: libraryKeys(items.Items), setup: base };
+    }
+    trimCache(people);
+    people.set(jellyfinUserId, { at: Date.now(), value });
+    return value;
+  } catch (err) {
+    if (!cached || Date.now() - cached.at > STALE_LIMIT) throw err;
+    log(`jellyfin rules for ${jellyfinUserId} unavailable, using the last ones: ${err.message}`);
+    return cached.value;
+  }
+}
+
+/**
+ * Whether a person's Jellyfin rules hide a title. Unchecked means hidden, like
+ * the keyword filter: it shows up once it has been looked up.
+ */
+function rulesHide(rules, key) {
+  if (rules.setup.owned.has(key)) return !rules.visible.has(key);
+  const keywords = verdictOf(key);
+  if (keywords === undefined) return true;
+  const type = key.split(':')[0];
+  return ruleHides(rules.policy, { type, keywords, cert: certOf(key) }, rules.setup) !== null;
+}
+
 /* ================================================================= decisions */
 
 function decided(ctx, action, key, req) {
@@ -527,7 +692,7 @@ async function titleResponse(req, res, ctx, route) {
   // The detail response names its own keywords, so it is decided from itself
   // and cached for everyone - no second lookup.
   const keywords = detailKeywords(body);
-  if (keywords) remember(route.key, keywords);
+  if (keywords) remember(route.key, keywords, certificationOf(body, ratingCountry));
   if (ctx.hide(route.key)) {
     decided(ctx, '404', route.key, req);
     if (!SHADOW) return hiddenJson(res);
@@ -905,9 +1070,27 @@ async function handle(req, res) {
   }
 
   const hidden = hiddenSet(entryForUser(state.store, user), state.store.adultTags);
-  if (!hidden.size) return streamProxy(req, res);
 
-  const ctx = { user, hidden, hide: makeHider(hidden, verdictView) };
+  let rules = null;
+  if (JELLYFIN_API_KEY && user.jellyfinUserId) {
+    try {
+      rules = await personRules(user.jellyfinUserId);
+    } catch (err) {
+      if (!hasPermission(user.permissions, PERMISSION.MANAGE_USERS) && !SHADOW) {
+        log(`withheld ${req.method} ${url.pathname} from ${user.name}: Jellyfin settings unavailable: ${err.message}`);
+        const message = 'Content filters are unavailable right now.';
+        return route.kind === 'page-title' && !route.data
+          ? sendText(res, 503, message)
+          : sendJson(res, 503, { message }, { 'x-seerr-guard': 'unavailable' });
+      }
+      log(`jellyfin rules unavailable for ${user.name}, passing (manager): ${err.message}`);
+    }
+  }
+  if (!hidden.size && !rules) return streamProxy(req, res);
+
+  const byKeywords = hidden.size ? makeHider(hidden, verdictView) : () => false;
+  const hide = rules ? (key) => byKeywords(key) || rulesHide(rules, key) : byKeywords;
+  const ctx = { user, hidden, hide };
   switch (route.kind) {
     case 'api-title': return titleResponse(req, res, ctx, route);
     case 'api-single': return singleResponse(req, res, ctx);
