@@ -613,16 +613,8 @@ services:
     # only by jellylab-push and mounted read-only here. Its adultTags list is
     # what the "hide adult content" switch stands for. Dropping 195669 "ecchi"
     # from it was tried on 2026-09-04 and reverted, because TMDB's keywords do
-    # not separate what they look like they separate:
-    #
-    #   a hentai anime       ecchi                            (hentai)
-    #   a mainstream anime   ecchi                            (mainstream)
-    #   another anime        ecchi, erotic                    (mainstream)
-    #   a film               erotic
-    #   another hentai anime softcore, ecchi, hentai, erotic
-    #
-    # The first two carry an identical keyword set, so no subset hides one and
-    # shows the other. Separating those needs a per-title exception.
+    # not separate what they look like they separate: a hentai and a mainstream
+    # anime can both carry just "ecchi", so only a per-title exception tells them apart.
     working_dir: /app
     command: node /app/guard.mjs
     ports:
