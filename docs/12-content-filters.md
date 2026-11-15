@@ -26,9 +26,14 @@ jellylab-push ──> Seerr directly (API key) ──> Jellyfin BlockedTags, per
   not forwarded. Without that, a phone or browser used earlier by an unfiltered
   person revalidated its cached copy, Seerr answered 304, and the filtered
   person saw the unfiltered results. The canary checks this case too.
-- In Jellyfin, `jellylab-push` stamps each title with `jellylab:kw:<keyword>`
-  tags and puts each person's markers in their **BlockedTags**. Jellyfin then
-  hides those titles in every client.
+- In Jellyfin, `jellylab-push` makes sure each title carries the **name** of
+  every hidden keyword it has as a tag ("ecchi", "erotic film"), and puts the
+  names of each person's keywords in their **BlockedTags**. Jellyfin then hides
+  those titles, their seasons and episodes in every client. A title whose own
+  metadata already has the word is left as it is. Only words the sync added
+  itself are ever removed again (it keeps a record in
+  `jellylab-push-data/filter-stamps.json`); anything else blocked by hand in
+  Jellyfin stays, unless it is the same word as one of the person's keywords.
 
 Decisions come from the keywords Seerr's own detail endpoint returns (cached for
 30 days), so no TMDB key of its own is needed.

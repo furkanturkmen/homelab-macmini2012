@@ -2,8 +2,9 @@
  * The per-person filter store and the Jellyfin half of enforcement.
  *
  * syncContentFilters runs against a fake Jellyfin and a fake Seerr, because
- * the thing worth proving is what it writes: which markers land on which
- * items, and whose BlockedTags change.
+ * the thing worth proving is what it writes: which words land on which items,
+ * and whose BlockedTags change - and that a word the sync did not put there is
+ * never taken away.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,6 +23,8 @@ const USERS = [
   { Id: 'admin-0000-0000', Name: 'admin', Policy: { IsAdministrator: true, BlockedTags: [] } },
   { Id: 'kid-0000-00000001', Name: 'robin', Policy: { IsAdministrator: false, BlockedTags: ['handmade'] } },
   { Id: 'self-000-00000001', Name: 'furkan', Policy: { IsAdministrator: false, BlockedTags: ['jellylab:kw:5'] } },
+  // Blocked by hand in Jellyfin: one word of their own, one that is also a keyword of theirs.
+  { Id: 'teen-000-00000001', Name: 'sam', Policy: { IsAdministrator: false, BlockedTags: ['harem', 'Ecchi'] } },
 ];
 const ITEMS = [
   { Id: 'i100', Name: 'Hidden film', Type: 'Movie', ProviderIds: { Tmdb: '100' }, Tags: [] },
@@ -29,8 +32,10 @@ const ITEMS = [
   { Id: 'i300', Name: 'Lookup fails', Type: 'Series', ProviderIds: { Tmdb: '300' }, Tags: ['jellylab:kw:5'] },
   { Id: 'i400', Name: 'No TMDB id', Type: 'Movie', ProviderIds: {}, Tags: [] },
   { Id: 'i500', Name: 'Some Collection', Type: 'BoxSet', ProviderIds: { Tmdb: '263' }, Tags: [] },
+  { Id: 'i600', Name: 'Tagged by its metadata', Type: 'Series', ProviderIds: { Tmdb: '600' }, Tags: ['Ecchi', 'school'] },
 ];
-const KEYWORDS = { 'movie:100': [5, 9], 'movie:200': [7] };
+const KEYWORDS = { 'movie:100': [5, 9], 'movie:200': [7], 'tv:600': [5] };
+const NAMES = { 5: 'ecchi', 7: 'romance', 9: 'gore' };
 
 const json = (res, status, obj) => {
   const body = JSON.stringify(obj);
@@ -65,6 +70,8 @@ before(async () => {
   seerr = http.createServer((req, res) => {
     const m = /^\/api\/v1\/(movie|tv)\/(\d+)$/.exec(new URL(req.url, 'http://x').pathname);
     if (req.headers['x-api-key'] !== 'k') return json(res, 401, {});
+    const k = /^\/api\/v1\/keyword\/(\d+)$/.exec(new URL(req.url, 'http://x').pathname);
+    if (k) return NAMES[k[1]] ? json(res, 200, { id: Number(k[1]), name: NAMES[k[1]] }) : json(res, 404, {});
     if (!m) return json(res, 404, {});
     const key = `${m[1]}:${m[2]}`;
     if (key === 'tv:300') return json(res, 500, { message: 'boom' });
@@ -80,6 +87,7 @@ before(async () => {
     CONTENT_FILTERS_PATH: join(dir, 'content-filters.json'),
     KEYWORD_CACHE_PATH: join(dir, 'keywords.json'),
     FILTERS_PATH: join(dir, 'filters.json'),
+    FILTER_STAMPS_PATH: join(dir, 'filter-stamps.json'),
   });
   filters = await import('../filters.mjs');
 });
@@ -138,26 +146,42 @@ test('setPersonFilters writes atomically and queues concurrent changes', async (
 });
 
 test('sync stamps by keyword, blocks per person, and never unhides on a failed lookup', async () => {
+  await filters.setPersonFilters('teen-000-00000001', { blockedTags: [5], name: 'sam' });
   writes.policies.length = 0;
   writes.items.length = 0;
   const out = await filters.syncContentFilters('token');
 
   const byItem = Object.fromEntries(writes.items.map((w) => [w.id, w.item.Tags]));
-  assert.deepEqual(byItem.i100, ['jellylab:kw:5'], 'carries keyword 5, which somebody is hidden from; keyword 9 nobody asked for');
-  assert.deepEqual(byItem.i200, [], 'no longer carries a hidden keyword, stale marker cleared');
+  assert.deepEqual(byItem.i100, ['ecchi'], 'carries keyword 5, written as its name; keyword 9 nobody asked for');
+  assert.deepEqual(byItem.i200, [], 'an old jellylab: marker is cleared');
+  assert.equal('i600' in byItem, false, 'its metadata already says "Ecchi": nothing to add');
   assert.equal('i300' in byItem, false, 'lookup failed: its existing marker is left alone');
   assert.equal('i400' in byItem, false, 'no TMDB id: not touched');
   assert.equal('i500' in byItem, false, 'a collection is not a title: not looked up, not touched');
   assert.equal(writes.items.find((w) => w.id === 'i100').item.Overview, 'kept', 'the full item goes back, not just Tags');
 
   const byUser = Object.fromEntries(writes.policies.map((w) => [w.id, w.policy.BlockedTags]));
-  assert.deepEqual(byUser['kid-0000-00000001'].sort(), ['handmade', 'jellylab:kw:5'], 'hand-made blocks are kept');
+  assert.deepEqual(byUser['kid-0000-00000001'].sort(), ['ecchi', 'handmade'], 'hand-made blocks are kept, the keyword is a word');
   assert.deepEqual(byUser['self-000-00000001'], [], 'furkan had a marker but is no longer filtered');
+  assert.deepEqual(byUser['teen-000-00000001'].sort(), ['ecchi', 'harem'], 'a hand-made "Ecchi" merges into the keyword; "harem" stays');
   assert.equal('admin-0000-0000' in byUser, false, 'an unfiltered admin policy is untouched');
 
   assert.equal(out.lookupFailures, 1);
-  assert.equal(out.library, 3);
+  assert.equal(out.library, 4);
   assert.deepEqual(out.tags, [5]);
+
+  const stamps = JSON.parse(await readFile(process.env.FILTER_STAMPS_PATH, 'utf8'));
+  assert.deepEqual(stamps.items, { i100: ['ecchi'] }, 'only what the sync added is on record, not the "Ecchi" i600 had of its own');
+  assert.deepEqual(stamps.users['teen-000-00000001'], ['ecchi']);
+});
+
+test('removing a keyword removes only the word the sync manages', async () => {
+  await filters.setPersonFilters('teen-000-00000001', { blockedTags: [] });
+  writes.policies.length = 0;
+  await filters.syncContentFilters('token');
+  const teen = writes.policies.find((w) => w.id === 'teen-000-00000001');
+  // The fake Jellyfin does not keep writes, so it still holds the hand-made list.
+  assert.deepEqual(teen.policy.BlockedTags, ['harem'], 'the managed "ecchi" goes, the hand-made "harem" stays');
 });
 
 test('with nobody filtered, markers are cleared without asking Seerr anything', async () => {

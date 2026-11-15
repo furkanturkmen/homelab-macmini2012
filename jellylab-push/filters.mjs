@@ -241,21 +241,57 @@ export async function requireAdmin(token) {
 /* ------------------------------------------------------ per-person filters */
 
 /**
- * The tag stamped on a library item for one hidden keyword.
+ * The tag stamped on a library item for one hidden keyword: the keyword's own
+ * name, as TMDB writes it ("ecchi", "erotic film"), so a title page and a
+ * person's blocked list read as words. A keyword TMDB no longer names is
+ * written as "keyword <id>".
  *
- * Per keyword rather than per filter: a person simply has a list of hidden
- * TMDB keyword ids, so the markers on an item say which keywords it carries.
+ * Earlier versions wrote `jellylab:kw:<id>`, which was exact but unreadable.
+ * The name works as well: the sync rewrites the titles and the blocked lists
+ * together, from the same names, in the same run.
  */
-export const markerFor = (keywordId) => `jellylab:kw:${keywordId}`;
+export const tagFor = (keywordId, names) => {
+  const name = names?.[keywordId];
+  return name && name !== String(keywordId) ? name : `keyword ${keywordId}`;
+};
 
 /**
- * Everything this service has ever stamped, for recognising its own work.
- *
- * Deliberately the bare prefix rather than `jellylab:kw:`. An earlier shape
- * named markers after a filter - `jellylab:f1788…` - and those have to be
- * recognised to be cleared, or they sit on the library for good.
+ * Tags from earlier versions, cleared wherever they are found. `jellylab:kw:`
+ * markers, and before them `jellylab:f1788…` named after a filter: the bare
+ * prefix catches both.
  */
 const MARKER_PREFIX = 'jellylab:';
+
+/**
+ * What the sync itself added, since a plain word has no prefix to recognise
+ * it by: per item the tags it stamped, per person the blocked entries it
+ * manages. Only those are ever removed again. A tag the title already had from
+ * its metadata, or an entry an administrator typed into Jellyfin, is never
+ * touched - unless it is the same word the sync manages for that person, in
+ * which case it is managed from then on.
+ */
+const STAMPS = process.env.FILTER_STAMPS_PATH || '/data/filter-stamps.json';
+
+async function loadStamps() {
+  try {
+    const doc = JSON.parse(await readFile(STAMPS, 'utf8'));
+    return { items: doc.items ?? {}, users: doc.users ?? {} };
+  } catch (e) {
+    // Missing is the first run. Unreadable is not guessed at: a wrong record
+    // could remove tags the sync never added.
+    if (e.code !== 'ENOENT') throw e;
+    return { items: {}, users: {} };
+  }
+}
+
+async function saveStamps(stamps) {
+  await mkdir(dirname(STAMPS), { recursive: true });
+  const tmp = `${STAMPS}.tmp`;
+  await writeFile(tmp, JSON.stringify(stamps, null, 1), 'utf8');
+  await rename(tmp, STAMPS);
+}
+
+const lower = (t) => String(t).toLowerCase();
 
 /**
  * The keywords the adult switch stands for, from the Seerr fork's
@@ -458,10 +494,16 @@ async function eachLimited(items, limit, fn) {
  * Make Jellyfin hide, per person, what the filter store says they may not see.
  *
  * The store decides; Jellyfin enforces. For every movie and series in the
- * library this asks which TMDB keywords it carries, stamps a `jellylab:kw:<id>`
- * tag for each keyword anybody is hidden from, and puts each person's own
- * markers in their Jellyfin BlockedTags. Jellyfin then hides those items from
- * that person in every client, whatever app they use.
+ * library this asks which TMDB keywords it carries, makes sure the title has a
+ * tag with the name of each keyword anybody is hidden from, and puts the names
+ * of each person's own keywords in their Jellyfin BlockedTags. Jellyfin then
+ * hides those titles - and their seasons and episodes, which it judges by the
+ * series - from that person in every client, whatever app they use.
+ *
+ * A title whose metadata already has the word ("ecchi" from AniDB, say) is
+ * left as it is: the word is there, and blocking it hides the title. Blocking
+ * by word also hides a title some other source tagged with that word, which
+ * only ever hides more, never less.
  *
  * This used to be derived from Seerr's global blocklist crawler in a Seerr
  * fork. Stock Seerr refuses a blocklisted title to everyone, so that crawler
@@ -483,6 +525,17 @@ export async function syncContentFilters(token) {
   const byJellyfinId = new Map(Object.keys(doc.users).map(id => [id, hiddenIdsFor(doc, id)]));
   const union = new Set([...byJellyfinId.values()].flat());
   const people = Object.entries(doc.users).map(([id, entry]) => ({ user: entry.name || id, keywords: byJellyfinId.get(id) }));
+  const stamps = await loadStamps();
+
+  // Every keyword's name, or no sync at all: a name that failed to load would
+  // turn into "keyword <id>" for one run and back, unhiding nothing but
+  // rewriting every title and blocked list twice.
+  const names = await keywordNames([...union]);
+  const unnamed = [...union].filter(id => !(id in names));
+  if (unnamed.length) {
+    throw Object.assign(new Error(`keyword names unavailable for ${unnamed.join(', ')}`), { status: 503 });
+  }
+  const tagOf = (id) => tagFor(id, names);
 
   /* ------------------------------------------ stamp the library to match */
   const jfUsers = await jellyfin('/Users', token);
@@ -511,8 +564,10 @@ export async function syncContentFilters(token) {
     if (librarianLifted) return;
     librarianLifted = true;
     const blocked = admin.Policy.BlockedTags ?? [];
-    if (!blocked.some(t => String(t).startsWith(MARKER_PREFIX))) return;
-    const keep = blocked.filter(t => !String(t).startsWith(MARKER_PREFIX));
+    const managed = new Set((stamps.users[admin.Id] ?? []).map(lower));
+    const ours = (t) => String(t).startsWith(MARKER_PREFIX) || managed.has(lower(t));
+    if (!blocked.some(ours)) return;
+    const keep = blocked.filter(t => !ours(t));
     await jellyfin(`/Users/${admin.Id}/Policy`, token, {
       method: 'POST',
       body: JSON.stringify({ ...admin.Policy, BlockedTags: keep }),
@@ -552,13 +607,20 @@ export async function syncContentFilters(token) {
   const cleared = [];
   for (const { item } of library) {
     const current = new Set(item.Tags ?? []);
-    const ours = [...current].filter(t => String(t).startsWith(MARKER_PREFIX));
+    const has = new Set([...current].map(lower));
+    const mine = new Set(stamps.items[item.Id] ?? []);
     let want;
     if (!union.size) want = new Set();
-    else if (keywordsOf.has(item.Id)) want = new Set(keywordsOf.get(item.Id).filter(id => union.has(id)).map(markerFor));
+    else if (keywordsOf.has(item.Id)) want = new Set(keywordsOf.get(item.Id).filter(id => union.has(id)).map(tagOf));
     else continue; // keywords unknown: leave this item exactly as it is
-    const toAdd = [...want].filter(t => !current.has(t));
-    const toRemove = ours.filter(t => !want.has(t));
+    const wantLower = new Set([...want].map(lower));
+    const toAdd = [...want].filter(t => !has.has(lower(t)));
+    // Old markers always go; a word only when this sync added it and it is no
+    // longer wanted.
+    const toRemove = [...current].filter(t => String(t).startsWith(MARKER_PREFIX) || (mine.has(t) && !wantLower.has(lower(t))));
+    const nowMine = [...current].filter(t => mine.has(t) && !toRemove.includes(t)).concat(toAdd);
+    if (nowMine.length) stamps.items[item.Id] = nowMine;
+    else delete stamps.items[item.Id];
     if (!toAdd.length && !toRemove.length) continue;
 
     // Jellyfin replaces the whole item on POST, so the full record goes back
@@ -575,6 +637,10 @@ export async function syncContentFilters(token) {
     if (toAdd.length) stamped.push({ item: item.Name, tags: toAdd });
     if (toRemove.length) cleared.push({ item: item.Name, tags: toRemove });
   }
+  // Titles no longer in the library leave no record behind.
+  const inLibrary = new Set(library.map(({ item }) => item.Id));
+  for (const id of Object.keys(stamps.items)) if (!inLibrary.has(id)) delete stamps.items[id];
+  await saveStamps(stamps);
 
   /* ------------------------------------------- block the markers per user */
   const applied = [];
@@ -584,15 +650,22 @@ export async function syncContentFilters(token) {
      * the person it affects, and an administrator who has asked for nothing
      * resolves to an empty list, which leaves their policy exactly as it was.
      */
-    const markers = (byJellyfinId.get(u.Id) ?? []).map(markerFor);
+    const markers = [...new Set((byJellyfinId.get(u.Id) ?? []).map(tagOf))];
     /*
-     * Only this service's markers are managed. Anything else an administrator
-     * blocked by hand in Jellyfin is left where it is, and the age cap and
-     * unrated settings are not touched at all.
+     * Only what this service manages is changed: old markers, and the words it
+     * put there before. Anything else an administrator blocked by hand in
+     * Jellyfin is left where it is, and the age cap and unrated settings are
+     * not touched at all. A hand-made entry that is the same word as one of
+     * the person's keywords is merged into it, and managed from then on.
      */
     const before = (u.Policy.BlockedTags ?? []);
-    const keep = before.filter(t => !String(t).startsWith(MARKER_PREFIX));
-    const next = [...new Set([...keep, ...markers])];
+    // Compared without capitals, as Jellyfin compares them when hiding.
+    const managed = new Set((stamps.users[u.Id] ?? []).map(lower));
+    const wanted = new Set(markers.map(lower));
+    const keep = before.filter(t => !String(t).startsWith(MARKER_PREFIX) && !managed.has(lower(t)) && !wanted.has(lower(t)));
+    const next = [...keep, ...markers];
+    if (markers.length) stamps.users[u.Id] = markers;
+    else delete stamps.users[u.Id];
     if (next.slice().sort().join('|') === before.slice().sort().join('|')) continue;
 
     await jellyfin(`/Users/${u.Id}/Policy`, token, {
@@ -601,6 +674,7 @@ export async function syncContentFilters(token) {
     });
     applied.push({ user: u.Name, markers });
   }
+  await saveStamps(stamps);
 
   return { people, tags: [...union], stamped, cleared, applied, lookupFailures, library: library.length };
 }
