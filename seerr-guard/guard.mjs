@@ -319,7 +319,7 @@ async function loadCache() {
     const doc = JSON.parse(await readFile(CACHE_PATH, 'utf8'));
     for (const [key, v] of Object.entries(doc.entries ?? {})) {
       if (Array.isArray(v.k) && Number.isFinite(v.at)) {
-        verdicts.set(key, { keywords: v.k, cert: 'c' in v ? v.c : undefined, at: v.at, ttl: v.ttl ?? TTL_KNOWN });
+        verdicts.set(key, { keywords: v.k, cert: 'r' in v ? v.r : undefined, at: v.at, ttl: v.ttl ?? TTL_KNOWN });
       }
     }
     log(`keyword cache: ${verdicts.size} titles`);
@@ -333,7 +333,9 @@ async function saveCache() {
   cacheDirty = false;
   const entries = {};
   for (const [key, v] of verdicts) {
-    entries[key] = v.cert === undefined ? { k: v.keywords, at: v.at, ttl: v.ttl } : { k: v.keywords, c: v.cert, at: v.at, ttl: v.ttl };
+    // `r`, the rating. (A first version stored it as `c`, read from the first
+    // release date only; those entries are ignored and looked up again.)
+    entries[key] = v.cert === undefined ? { k: v.keywords, at: v.at, ttl: v.ttl } : { k: v.keywords, r: v.cert, at: v.at, ttl: v.ttl };
   }
   try {
     await mkdir(dirname(CACHE_PATH), { recursive: true });

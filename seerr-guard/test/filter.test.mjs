@@ -271,7 +271,11 @@ test('certificationOf picks the rating Jellyfin will store', () => {
     { iso_3166_1: 'DE', release_dates: [{ certification: '16' }] },
     { iso_3166_1: 'US', release_dates: [{ certification: 'NC-17' }, { certification: 'R' }] },
   ] } };
-  assert.equal(certificationOf(movie, 'US'), 'NC-17', "the US entry's first release date");
+  assert.equal(certificationOf(movie, 'US'), 'NC-17', "the US entry's first rated release date");
+  const premiereFirst = { releases: { results: [{ iso_3166_1: 'US', release_dates: [
+    { type: 1, certification: '' }, { type: 3, certification: 'G' },
+  ] }] } };
+  assert.equal(certificationOf(premiereFirst), 'G', 'a premiere listed first without a rating is skipped');
   assert.equal(certificationOf(movie, 'DE'), 'DE-16', 'another country is prefixed, as Jellyfin writes it');
   assert.equal(certificationOf(movie, 'NL'), 'NC-17', 'no entry for the country falls back to the US');
   assert.equal(certificationOf({ releases: { results: [{ iso_3166_1: 'US', release_dates: [{ certification: '' }] }] } }), null, 'an empty certification is unrated');

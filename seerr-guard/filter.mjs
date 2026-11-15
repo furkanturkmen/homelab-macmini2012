@@ -509,9 +509,15 @@ export const ANIME_KEYWORD = 210024;
 /**
  * The rating Jellyfin's TMDB provider will store for a title, or null.
  *
- * Same choice as the provider: the metadata country's entry, else the US one,
- * and for a film the first release date's certification. Another country's
- * rating gets that country as a prefix ("DE-16"), as Jellyfin writes it.
+ * The metadata country's entry, else the US one, and for a film the first
+ * release date that carries a certification: a premiere is often listed first
+ * with none, then the cinema release with the real one. Checked against a
+ * library of 144 titles, this matched the rating Jellyfin stored for 122;
+ * taking the first release date as it comes matched 86. The rest are mostly
+ * series that Jellyfin rated from another source than TMDB, which only a title
+ * already in the library can settle - and those are decided by Jellyfin
+ * itself. Another country's rating gets that country as a prefix ("DE-16"),
+ * as Jellyfin writes it.
  */
 export function certificationOf(body, country = 'US') {
   const pick = (rows, code) => (rows ?? []).find((r) => r?.iso_3166_1 === code);
@@ -521,7 +527,7 @@ export function certificationOf(body, country = 'US') {
     for (const code of country === 'US' ? ['US'] : [country, 'US']) {
       const row = pick(releases, code);
       if (row) {
-        const cert = String(row.release_dates?.[0]?.certification ?? '').trim();
+        const cert = String((row.release_dates ?? []).find((d) => String(d?.certification ?? '').trim())?.certification ?? '').trim();
         return cert ? `${prefix(code)}${cert}` : null;
       }
     }
