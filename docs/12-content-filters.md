@@ -38,6 +38,22 @@ jellylab-push ──> Seerr directly (API key) ──> Jellyfin BlockedTags, per
 Decisions come from the keywords Seerr's own detail endpoint returns (cached for
 30 days), so no TMDB key of its own is needed.
 
+**Broad keywords.** On the filter page any keyword can be switched to
+*broad*: its word then also hides every TMDB keyword and every library tag that
+contains it, for everyone who has it ("harem" also hides "reverse harem" and
+AniList's "Female Harem"). The sync works the reach out every run, saves it in
+the store for seerr-guard, and the page shows it under the keywords. Meant for
+words like these; "school" would reach far too much.
+
+**Sexual content, a backup.** A person can also be given *Hide sexual
+content*: titles AniList marks adult or files under Hentai or Ecchi,
+MyAnimeList rates Rx or R+, or TMDB marks adult, whatever their keywords. It
+catches titles nobody gave the right keywords. AniList and MyAnimeList answers
+are kept for 30 days (`jellylab-push-data/sexual-content.json`); MyAnimeList's
+free mirror (Jikan) is sometimes down, and then simply adds nothing until it
+answers again. In Seerr, titles not yet in the library are judged by TMDB's
+adult flag; once in the library, Jellyfin's verdict applies.
+
 **Jellyfin's own limits count in Seerr too.** A person's Jellyfin settings
 (Dashboard › Users › the person › *Parental control* and *Access*) also apply
 in Seerr, with or without a keyword filter:

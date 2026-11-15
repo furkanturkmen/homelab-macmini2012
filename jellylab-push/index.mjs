@@ -1334,6 +1334,30 @@ const server = createServer(async (req, res) => {
    * settings API (the JellyLab app's adult switch) after applying the fork's
    * permission rules - it proves itself with the shared secret instead.
    */
+  /*
+   * Which keywords are broad: their word also hides every keyword and tag
+   * containing it ("harem" also "Female Harem"). One list for everyone, saved
+   * like a person's filter, and applied by a sync straight away.
+   */
+  if (url.pathname === '/filters/broad' && req.method === 'PUT') {
+    const secret = req.headers['x-filter-store-secret'];
+    try {
+      if (!(FILTER_STORE_SECRET && secret === FILTER_STORE_SECRET)) {
+        if (!fromHomeNetwork(req)) throw Object.assign(new Error('home network only'), { status: 403 });
+        await filters.requireAdmin(req.headers['x-emby-token']);
+      }
+      const { ids } = JSON.parse((await readText(req)) || '{}');
+      const doc = await filters.setBroadTags(ids);
+      log(`filter store: ${doc.broadTags.length} broad keyword(s)`);
+      if (JELLYFIN_API_KEY) {
+        runFilterSync(JELLYFIN_API_KEY, 'changed', false).catch(e => log(`filter sync failed: ${e.message}`));
+      }
+      return send(res, 200, { broadTags: doc.broadTags });
+    } catch (err) {
+      return send(res, err.status ?? (err instanceof SyntaxError ? 400 : 500), { error: err.message });
+    }
+  }
+
   const personMatch = /^\/filters\/content\/([^/]+)$/.exec(url.pathname);
   if (personMatch && req.method === 'PUT') {
     const secret = req.headers['x-filter-store-secret'];

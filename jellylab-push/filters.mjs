@@ -316,8 +316,29 @@ export function parseIds(raw) {
 const emptyContent = () => ({ version: 2, adultTags: [...DEFAULT_ADULT_TAGS], users: {}, canary: null });
 
 /** Reject anything that is not the shape seerr-guard parses (filter.mjs readStore). */
+/*
+ * "Sexual content", the backup verdict. Not a TMDB keyword: a title gets it
+ * when AniList marks it adult or files it under Hentai or Ecchi, when
+ * MyAnimeList rates it Rx or R+, or when TMDB marks it adult. It travels
+ * through the store like a keyword so a person can be given it the same way;
+ * the number is far above any TMDB keyword id, so it can never mean one.
+ */
+export const SEXUAL_CONTENT = 999999999;
+export const SEXUAL_CONTENT_NAME = 'sexual content';
+
+const isIdList = (v) => Array.isArray(v) && v.every(t => Number.isInteger(t) && t > 0);
+
 export function validateContent(doc) {
   if (!doc || typeof doc !== 'object') return 'store must be an object';
+  // Keywords whose word also blocks every tag and keyword containing it, and
+  // what the sync found each one to contain.
+  if ('broadTags' in doc && !isIdList(doc.broadTags)) return 'broadTags must be positive integers';
+  if ('expansions' in doc) {
+    if (!doc.expansions || typeof doc.expansions !== 'object' || Array.isArray(doc.expansions)) return 'expansions must be an object';
+    for (const [id, x] of Object.entries(doc.expansions)) {
+      if (!x || !isIdList(x.ids) || !Array.isArray(x.words) || x.words.some(w => typeof w !== 'string')) return `expansions.${id} is malformed`;
+    }
+  }
   if (doc.version !== 2) return 'store version must be 2';
   if (!doc.users || typeof doc.users !== 'object' || Array.isArray(doc.users)) return 'users must be an object';
   for (const [id, entry] of Object.entries(doc.users)) {
@@ -404,8 +425,30 @@ export function setPersonFilters(jellyfinUserId, changes) {
   return run;
 }
 
+/** Save a whole new store, in the same queue as a person's change. */
+function writeContent(change) {
+  const run = contentWrites.then(async () => {
+    const doc = change(await loadContent());
+    const problem = validateContent(doc);
+    if (problem) throw Object.assign(new Error(problem), { status: 400 });
+    await mkdir(dirname(CONTENT_STORE), { recursive: true });
+    const tmp = `${CONTENT_STORE}.tmp`;
+    await writeFile(tmp, JSON.stringify(doc, null, 2) + '\n', { encoding: 'utf8', mode: 0o644 });
+    await rename(tmp, CONTENT_STORE);
+    return doc;
+  });
+  contentWrites = run.catch(() => {});
+  return run;
+}
+
+/** Which keywords are broad: their word also blocks tags and keywords containing it. */
+export function setBroadTags(ids) {
+  return writeContent(doc => ({ ...doc, broadTags: parseIds(ids) }));
+}
+
 /**
- * The keyword ids hidden from one person.
+ * The keyword ids hidden from one person, with what their broad keywords
+ * expand to.
  *
  * blockedTags is what an administrator imposed. hideAdult is the person's own
  * switch and only ever adds, so switching it off returns them to the
@@ -414,7 +457,24 @@ export function setPersonFilters(jellyfinUserId, changes) {
 export function hiddenIdsFor(doc, jellyfinUserId) {
   const entry = doc.users[jellyfinUserId];
   if (!entry) return [];
-  return parseIds([...entry.blockedTags, ...(entry.hideAdult ? doc.adultTags : [])]);
+  const own = parseIds([...entry.blockedTags, ...(entry.hideAdult ? doc.adultTags : [])]);
+  return parseIds([...own, ...own.flatMap(id => doc.expansions?.[id]?.ids ?? [])]);
+}
+
+/** Library tags a person's broad keywords expand to (words that are not TMDB keywords). */
+export function expandedWordsFor(doc, jellyfinUserId) {
+  const entry = doc.users[jellyfinUserId];
+  if (!entry) return [];
+  const own = parseIds([...entry.blockedTags, ...(entry.hideAdult ? doc.adultTags : [])]);
+  return [...new Set(own.flatMap(id => doc.expansions?.[id]?.words ?? []))];
+}
+
+/** Whether `tag` contains `word` as whole words: "Female Harem" contains "harem", "harems" does not. */
+export function containsWord(tag, word) {
+  const w = String(word).trim().toLowerCase();
+  if (!w) return false;
+  const escaped = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'iu').test(String(tag));
 }
 
 /* ------------------------------------------------- title keywords, cached */
@@ -456,17 +516,19 @@ async function titleKeywords(mediaType, tmdbId) {
   const cache = await keywordCacheMap();
   const key = `${mediaType}:${tmdbId}`;
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < (hit.ttl ?? 30 * DAY)) return hit.k;
+  // `a` marks an entry that also looked at TMDB's adult flag; older ones did not.
+  if (hit && hit.a && Date.now() - hit.at < (hit.ttl ?? 30 * DAY)) return hit.k;
   try {
     const body = await seerr(`/${mediaType}/${tmdbId}`);
     if (!Array.isArray(body.keywords)) throw new Error(`jellyseerr /${mediaType}/${tmdbId} has no keywords field`);
-    const k = parseIds(body.keywords.map(kw => kw?.id));
-    cache.set(key, { k, at: Date.now(), ttl: 30 * DAY });
+    // TMDB's adult flag counts as sexual content, carried like a keyword.
+    const k = parseIds([...body.keywords.map(kw => kw?.id), ...(body.adult === true ? [SEXUAL_CONTENT] : [])]);
+    cache.set(key, { k, a: 1, at: Date.now(), ttl: 30 * DAY });
     keywordCacheDirty = true;
     return k;
   } catch (e) {
     if (e.status === 404) {
-      cache.set(key, { k: [], at: Date.now(), ttl: DAY });
+      cache.set(key, { k: [], a: 1, at: Date.now(), ttl: DAY });
       keywordCacheDirty = true;
       return [];
     }
@@ -474,6 +536,126 @@ async function titleKeywords(mediaType, tmdbId) {
     if (hit) return hit.k;
     throw e;
   }
+}
+
+/* --------------------------------------- sexual content: AniList and MyAnimeList */
+
+/*
+ * The backup verdict for anime. AniList is official and free; it is asked for
+ * fifty titles at a time. MyAnimeList's rating comes through Jikan, a free
+ * volunteer-run mirror that is sometimes down: the first time it does not
+ * answer in a run, it is left out for the rest of that run instead of waiting
+ * on it title after title. A source that cannot answer adds nothing - the
+ * keywords still apply - so this only ever hides more.
+ *
+ * Kept for 30 days. A MyAnimeList answer that could not be had is not kept, so
+ * it is asked again next run.
+ */
+const SEXUAL_CACHE = process.env.SEXUAL_CACHE_PATH || '/data/sexual-content.json';
+const ANILIST_URL = process.env.ANILIST_URL || 'https://graphql.anilist.co';
+const JIKAN_URL = process.env.JIKAN_URL || 'https://api.jikan.moe/v4';
+
+/** Whether a source's answer means sexual content. */
+export function sexualFrom({ anilist, malRating }) {
+  const why = [];
+  if (anilist?.isAdult) why.push('AniList: adult');
+  for (const g of ['Hentai', 'Ecchi']) if ((anilist?.genres ?? []).includes(g)) why.push(`AniList: ${g}`);
+  const rating = String(malRating ?? '');
+  if (/^Rx\b/.test(rating)) why.push('MyAnimeList: Rx (hentai)');
+  if (/^R\+/.test(rating)) why.push('MyAnimeList: R+ (mild nudity)');
+  return why;
+}
+
+async function loadSexualCache() {
+  try {
+    const doc = JSON.parse(await readFile(SEXUAL_CACHE, 'utf8'));
+    return { anilist: doc.anilist ?? {}, mal: doc.mal ?? {} };
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+    return { anilist: {}, mal: {} };
+  }
+}
+
+async function saveSexualCache(cache) {
+  await mkdir(dirname(SEXUAL_CACHE), { recursive: true });
+  const tmp = `${SEXUAL_CACHE}.tmp`;
+  await writeFile(tmp, JSON.stringify(cache), 'utf8');
+  await rename(tmp, SEXUAL_CACHE);
+}
+
+const fresh = (entry) => entry && Date.now() - entry.at < 30 * DAY;
+
+/**
+ * AniList ids -> reasons a title is sexual content ([] when it is not, absent
+ * when nothing could be learned about it).
+ */
+async function sexualVerdicts(anilistIds) {
+  const cache = await loadSexualCache();
+  const ids = [...new Set(anilistIds)];
+  const missing = ids.filter(id => !fresh(cache.anilist[id]));
+  for (let i = 0; i < missing.length; i += 50) {
+    const batch = missing.slice(i, i + 50);
+    try {
+      const res = await fetch(ANILIST_URL, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({
+          query: 'query($ids:[Int]){Page(perPage:50){media(id_in:$ids){id isAdult genres idMal}}}',
+          variables: { ids: batch },
+        }),
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) throw new Error(`anilist answered ${res.status}`);
+      for (const m of (await res.json())?.data?.Page?.media ?? []) {
+        cache.anilist[m.id] = { isAdult: m.isAdult === true, genres: m.genres ?? [], idMal: m.idMal ?? null, at: Date.now() };
+      }
+    } catch {
+      break; // keep what is known; the rest is asked next run
+    }
+  }
+  let malDown = false;
+  for (const id of ids) {
+    const idMal = cache.anilist[id]?.idMal;
+    if (!idMal || fresh(cache.mal[idMal]) || malDown) continue;
+    try {
+      const res = await fetch(`${JIKAN_URL}/anime/${idMal}`, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) throw new Error(`jikan answered ${res.status}`);
+      cache.mal[idMal] = { rating: (await res.json())?.data?.rating ?? null, at: Date.now() };
+      await new Promise(r => setTimeout(r, 400)); // Jikan allows about three a second
+    } catch {
+      malDown = true;
+    }
+  }
+  await saveSexualCache(cache).catch(() => {});
+  const out = new Map();
+  for (const id of ids) {
+    const anilist = cache.anilist[id];
+    if (!anilist) continue;
+    out.set(id, sexualFrom({ anilist, malRating: cache.mal[anilist.idMal]?.rating }));
+  }
+  return out;
+}
+
+/* ------------------------------------------------- broad keywords, expanded */
+
+/**
+ * What a broad keyword's word reaches: TMDB keywords whose name contains it
+ * (found through Seerr's keyword search) and library tags that contain it.
+ */
+async function expandWord(word, libraryTags) {
+  const ids = [];
+  for (let page = 1; page <= 10; page++) {
+    const body = await seerr(`/search/keyword?query=${encodeURIComponent(word)}&page=${page}`);
+    for (const k of body.results ?? []) {
+      if (Number.isInteger(k?.id) && typeof k.name === 'string' && containsWord(k.name, word)) {
+        ids.push(k.id);
+        keywordNameCache.set(k.id, k.name);
+      }
+    }
+    if (page >= (body.totalPages ?? 1)) break;
+  }
+  const words = libraryTags.filter(t => containsWord(t, word) && t.toLowerCase() !== word.toLowerCase());
+  return { ids: parseIds(ids), words: [...new Set(words)].sort() };
 }
 
 /** Run `fn` over `items`, `limit` at a time. */
@@ -521,21 +703,8 @@ export async function syncContentFilters(token) {
     throw Object.assign(new Error('jellyseerr api key not configured'), { status: 503 });
   }
 
-  const doc = await loadContent();
-  const byJellyfinId = new Map(Object.keys(doc.users).map(id => [id, hiddenIdsFor(doc, id)]));
-  const union = new Set([...byJellyfinId.values()].flat());
-  const people = Object.entries(doc.users).map(([id, entry]) => ({ user: entry.name || id, keywords: byJellyfinId.get(id) }));
+  let doc = await loadContent();
   const stamps = await loadStamps();
-
-  // Every keyword's name, or no sync at all: a name that failed to load would
-  // turn into "keyword <id>" for one run and back, unhiding nothing but
-  // rewriting every title and blocked list twice.
-  const names = await keywordNames([...union]);
-  const unnamed = [...union].filter(id => !(id in names));
-  if (unnamed.length) {
-    throw Object.assign(new Error(`keyword names unavailable for ${unnamed.join(', ')}`), { status: 503 });
-  }
-  const tagOf = (id) => tagFor(id, names);
 
   /* ------------------------------------------ stamp the library to match */
   const jfUsers = await jellyfin('/Users', token);
@@ -588,6 +757,42 @@ export async function syncContentFilters(token) {
     .map(item => ({ item, tmdbId: Number(item.ProviderIds?.Tmdb), mediaType: item.Type === 'Series' ? 'tv' : 'movie' }))
     .filter(x => Number.isInteger(x.tmdbId) && x.tmdbId > 0);
 
+  /*
+   * Broad keywords in use, expanded: the TMDB keywords and library tags that
+   * contain their word. Worked out every run, because the library's tags
+   * change, and saved in the store so seerr-guard hides the same keywords. A
+   * search that fails stops the run: an expansion half worked out would
+   * unblock whatever it dropped.
+   */
+  const ownIds = new Set(Object.keys(doc.users).flatMap(id => parseIds([
+    ...doc.users[id].blockedTags, ...(doc.users[id].hideAdult ? doc.adultTags : []),
+  ])));
+  const broadInUse = (doc.broadTags ?? []).filter(id => ownIds.has(id) && id !== SEXUAL_CONTENT);
+  const libraryTags = [...new Set((items.Items ?? []).flatMap(i => i.Tags ?? []).filter(t => !String(t).startsWith(MARKER_PREFIX)))];
+  const broadNames = await keywordNames(broadInUse);
+  const expansions = {};
+  for (const id of broadInUse) {
+    if (!(id in broadNames)) throw Object.assign(new Error(`keyword name unavailable for ${id}`), { status: 503 });
+    expansions[id] = await expandWord(broadNames[id], libraryTags);
+  }
+  if (JSON.stringify(expansions) !== JSON.stringify(doc.expansions ?? {})) {
+    doc = await writeContent(d => ({ ...d, expansions }));
+  }
+
+  const byJellyfinId = new Map(Object.keys(doc.users).map(id => [id, hiddenIdsFor(doc, id)]));
+  const union = new Set([...byJellyfinId.values()].flat());
+  const people = Object.entries(doc.users).map(([id, entry]) => ({ user: entry.name || id, keywords: byJellyfinId.get(id) }));
+
+  // Every keyword's name, or no sync at all: a name that failed to load would
+  // turn into "keyword <id>" for one run and back, unhiding nothing but
+  // rewriting every title and blocked list twice.
+  const names = await keywordNames([...union]);
+  const unnamed = [...union].filter(id => !(id in names));
+  if (unnamed.length) {
+    throw Object.assign(new Error(`keyword names unavailable for ${unnamed.join(', ')}`), { status: 503 });
+  }
+  const tagOf = (id) => tagFor(id, names);
+
   // Keywords only matter while somebody is filtered. With nobody, every
   // marker is simply cleared and Seerr is not asked about anything.
   const keywordsOf = new Map();
@@ -601,6 +806,22 @@ export async function syncContentFilters(token) {
       }
     });
     await saveKeywordCache().catch(() => {});
+  }
+
+  // The backup verdict, only while somebody hides sexual content: an anime
+  // AniList or MyAnimeList calls sexual gets it like a keyword.
+  const sexual = [];
+  if (union.has(SEXUAL_CONTENT)) {
+    const anilistOf = new Map(library
+      .map(({ item }) => [item.Id, Number(item.ProviderIds?.AniList)])
+      .filter(([, a]) => Number.isInteger(a) && a > 0));
+    const verdicts = await sexualVerdicts([...anilistOf.values()]);
+    for (const [itemId, a] of anilistOf) {
+      const why = verdicts.get(a) ?? [];
+      if (!why.length || !keywordsOf.has(itemId)) continue;
+      keywordsOf.set(itemId, parseIds([...keywordsOf.get(itemId), SEXUAL_CONTENT]));
+      sexual.push({ item: library.find(x => x.item.Id === itemId).item.Name, why });
+    }
   }
 
   const stamped = [];
@@ -650,7 +871,7 @@ export async function syncContentFilters(token) {
      * the person it affects, and an administrator who has asked for nothing
      * resolves to an empty list, which leaves their policy exactly as it was.
      */
-    const markers = [...new Set((byJellyfinId.get(u.Id) ?? []).map(tagOf))];
+    const markers = [...new Set([...(byJellyfinId.get(u.Id) ?? []).map(tagOf), ...expandedWordsFor(doc, u.Id)])];
     /*
      * Only what this service manages is changed: old markers, and the words it
      * put there before. Anything else an administrator blocked by hand in
@@ -676,7 +897,7 @@ export async function syncContentFilters(token) {
   }
   await saveStamps(stamps);
 
-  return { people, tags: [...union], stamped, cleared, applied, lookupFailures, library: library.length };
+  return { people, tags: [...union], stamped, cleared, applied, lookupFailures, library: library.length, expansions, sexual };
 }
 
 /* ------------------------------------------------ for the filter page */
@@ -697,6 +918,10 @@ const keywordNameCache = new Map();
 export async function keywordNames(ids) {
   const out = {};
   await eachLimited(parseIds(ids), 4, async (id) => {
+    if (id === SEXUAL_CONTENT) {
+      out[id] = SEXUAL_CONTENT_NAME;
+      return;
+    }
     if (!keywordNameCache.has(id)) {
       try {
         const body = await seerr(`/keyword/${id}`);

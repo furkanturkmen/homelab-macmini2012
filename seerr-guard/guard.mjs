@@ -319,7 +319,7 @@ async function loadCache() {
     const doc = JSON.parse(await readFile(CACHE_PATH, 'utf8'));
     for (const [key, v] of Object.entries(doc.entries ?? {})) {
       if (Array.isArray(v.k) && Number.isFinite(v.at)) {
-        verdicts.set(key, { keywords: v.k, cert: 'r' in v ? v.r : undefined, at: v.at, ttl: v.ttl ?? TTL_KNOWN });
+        verdicts.set(key, { keywords: v.k, cert: 'q' in v ? v.q : undefined, at: v.at, ttl: v.ttl ?? TTL_KNOWN });
       }
     }
     log(`keyword cache: ${verdicts.size} titles`);
@@ -333,9 +333,10 @@ async function saveCache() {
   cacheDirty = false;
   const entries = {};
   for (const [key, v] of verdicts) {
-    // `r`, the rating. (A first version stored it as `c`, read from the first
-    // release date only; those entries are ignored and looked up again.)
-    entries[key] = v.cert === undefined ? { k: v.keywords, at: v.at, ttl: v.ttl } : { k: v.keywords, r: v.cert, at: v.at, ttl: v.ttl };
+    // `q`, the rating, saved by a version that also reads TMDB's adult flag
+    // into the keywords. Entries without it (`c`, `r`: older readings) are
+    // ignored and looked up again.
+    entries[key] = v.cert === undefined ? { k: v.keywords, at: v.at, ttl: v.ttl } : { k: v.keywords, q: v.cert, at: v.at, ttl: v.ttl };
   }
   try {
     await mkdir(dirname(CACHE_PATH), { recursive: true });
@@ -851,7 +852,7 @@ async function decideEndpoint(res, url) {
   if (!user) return sendJson(res, 404, { message: 'no such Seerr user' });
   const state = await currentStore();
   if (!state.ok) return sendJson(res, 503, { message: `store: ${state.error}` });
-  const hidden = hiddenSet(entryForUser(state.store, user), state.store.adultTags);
+  const hidden = hiddenSet(entryForUser(state.store, user), state.store.adultTags, state.store.expansions);
   const keys = String(url.searchParams.get('keys') ?? '').split(',').filter((k) => /^(movie|tv):\d+$/.test(k));
   await ensureVerdicts(keys, 15000);
   const hide = makeHider(hidden, verdictView, { failClosed: false });
@@ -1071,7 +1072,7 @@ async function handle(req, res) {
       : sendJson(res, 503, { message }, { 'x-seerr-guard': 'unavailable' });
   }
 
-  const hidden = hiddenSet(entryForUser(state.store, user), state.store.adultTags);
+  const hidden = hiddenSet(entryForUser(state.store, user), state.store.adultTags, state.store.expansions);
 
   let rules = null;
   if (JELLYFIN_API_KEY && user.jellyfinUserId) {

@@ -325,3 +325,16 @@ test('ruleHides: age cap, unrated and libraries, the way Jellyfin decides them',
   assert.equal(ruleHides({ EnableAllFolders: true }, film('NC-17'), SETUP), null, 'nobody limited, nothing hidden');
   assert.equal(ruleHides({ ...TEEN, EnableAllFolders: true, BlockedMediaFolders: ['lib-movies'] }, film('PG'), SETUP), 'library');
 });
+
+test('broad keywords expand, and TMDB adult counts as sexual content', async () => {
+  const { readStore: rs, hiddenSet: hs, detailKeywords: dk, SEXUAL_CONTENT } = await import('../filter.mjs');
+  const store = rs(JSON.stringify({
+    version: 2, adultTags: [],
+    users: { kid: { blockedTags: [9194], hideAdult: false } },
+    expansions: { 9194: { ids: [777, 9194], words: ['Female Harem'] } },
+  }));
+  assert.deepEqual([...hs(store.users.get('kid'), store.adultTags, store.expansions)].sort(), [777, 9194]);
+  assert.throws(() => rs(JSON.stringify({ version: 2, adultTags: [], users: {}, expansions: [] })), /expansions/);
+  assert.deepEqual(dk({ keywords: [{ id: 5 }], adult: true }), [5, SEXUAL_CONTENT]);
+  assert.deepEqual(dk({ keywords: [{ id: 5 }], adult: false }), [5]);
+});

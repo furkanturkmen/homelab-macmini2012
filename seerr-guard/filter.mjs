@@ -91,6 +91,15 @@ export function readStore(text) {
     });
   }
   const adultTags = parseIds(doc.adultTags);
+  // What each broad keyword reaches: the TMDB keywords whose name contains its
+  // word, worked out by jellylab-push. Hiding the keyword hides those too.
+  const expansions = new Map();
+  if (doc.expansions !== undefined) {
+    if (!doc.expansions || typeof doc.expansions !== 'object' || Array.isArray(doc.expansions)) {
+      throw new Error('store.expansions must be an object');
+    }
+    for (const [id, x] of Object.entries(doc.expansions)) expansions.set(Number(id), parseIds(x?.ids));
+  }
   let canary = null;
   if (doc.canary) {
     const c = doc.canary;
@@ -103,7 +112,7 @@ export function readStore(text) {
       keywordId: Number(c.keywordId) || null,
     };
   }
-  return { users, adultTags, canary };
+  return { users, adultTags, canary, expansions };
 }
 
 /**
@@ -130,11 +139,20 @@ export function entryForUser(store, user) {
  * still choose not to, and switching it off returns them to the
  * administrator's list rather than to nothing.
  */
-export function hiddenSet(entry, adultTags) {
+export function hiddenSet(entry, adultTags, expansions) {
   const hidden = new Set(entry?.blockedTags ?? []);
   if (entry?.hideAdult) for (const id of adultTags ?? []) hidden.add(id);
+  for (const id of [...hidden]) for (const more of expansions?.get(id) ?? []) hidden.add(more);
   return hidden;
 }
+
+/**
+ * "Sexual content", jellylab-push's backup verdict, carried like a keyword.
+ * Here it comes from TMDB's adult flag in Seerr's own detail answer; for a
+ * title already in the library, Jellyfin's verdict (AniList, MyAnimeList)
+ * applies through the person's Jellyfin rules.
+ */
+export const SEXUAL_CONTENT = 999999999;
 
 /* -------------------------------------------------------------- routing rules */
 
@@ -295,7 +313,8 @@ export const singleTitleKey = (body) => rowKey(body && typeof body === 'object' 
  */
 export function detailKeywords(body) {
   if (!body || typeof body !== 'object' || !Array.isArray(body.keywords)) return null;
-  return parseIds(body.keywords.map((k) => (k && typeof k === 'object' ? k.id : k)));
+  const ids = body.keywords.map((k) => (k && typeof k === 'object' ? k.id : k));
+  return parseIds(body.adult === true ? [...ids, SEXUAL_CONTENT] : ids);
 }
 
 /**

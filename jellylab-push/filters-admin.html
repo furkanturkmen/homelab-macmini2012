@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Content filters</title>
 <style>
-  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2230; --muted:#667085; --line:#e4e7ec; --accent:#6d4aff; --danger:#c0362c; --ok:#1f7a4d; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#11141b; --card:#1a1f2a; --ink:#e8eaf0; --muted:#98a2b3; --line:#2a3140; --accent:#9b87ff; --danger:#ff7a6e; --ok:#5fd39a; } }
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2230; --muted:#667085; --line:#e4e7ec; --accent:#6d4aff; --on-accent:#fff; --danger:#c0362c; --ok:#1f7a4d; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11141b; --card:#1a1f2a; --ink:#e8eaf0; --muted:#98a2b3; --line:#2a3140; --accent:#9b87ff; --on-accent:#11141b; --danger:#ff7a6e; --ok:#5fd39a; } }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--ink); padding:24px 16px; }
   main { max-width:760px; margin:0 auto; }
@@ -15,7 +15,7 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; }
   label { display:block; font-weight:600; margin:10px 0 4px; }
   input[type=text], input[type=password], input[type=search] { width:100%; padding:9px 11px; border:1px solid var(--line); border-radius:8px; background:transparent; color:var(--ink); font:inherit; }
-  button { font:inherit; border:0; border-radius:8px; padding:9px 14px; background:var(--accent); color:#fff; cursor:pointer; }
+  button { font:inherit; border:0; border-radius:8px; padding:9px 14px; background:var(--accent); color:var(--on-accent); cursor:pointer; }
   button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
   button:disabled { opacity:.55; cursor:default; }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -26,6 +26,8 @@
   .chips { display:flex; flex-wrap:wrap; gap:6px; min-height:34px; padding:4px 0; }
   .chip { display:inline-flex; align-items:center; gap:6px; background:var(--bg); border:1px solid var(--line); border-radius:999px; padding:4px 6px 4px 11px; }
   .chip button { background:transparent; color:var(--muted); padding:0 6px; font-size:16px; line-height:1; }
+  .chip button.broad { font-size:11px; border:1px solid var(--line); border-radius:999px; padding:1px 7px; }
+  .chip button.broad[aria-pressed=true] { color:var(--on-accent); background:var(--accent); border-color:var(--accent); }
   .results { list-style:none; margin:6px 0 0; padding:0; max-height:220px; overflow:auto; }
   .results li button { width:100%; text-align:left; background:transparent; color:var(--ink); border-radius:6px; padding:7px 9px; }
   .results li button:hover { background:var(--bg); }
@@ -41,7 +43,7 @@
 <body>
 <main>
   <h1>Content filters</h1>
-  <p class="lead">Choose which TMDB keywords are hidden from each person. Hidden titles disappear from Seerr and Jellyfin for them.</p>
+  <p class="lead">Choose what is hidden from each person: TMDB keywords, and titles marked as sexual content. Hidden titles disappear from Seerr and Jellyfin for them.</p>
 
   <section class="card" id="login">
     <form id="login-form">
@@ -67,6 +69,12 @@
       <strong id="editing"></strong>
       <label>Hidden keywords <span class="muted" style="font-weight:400">(set by an administrator; the person cannot remove these)</span></label>
       <div class="chips" id="chips"></div>
+      <p class="muted" style="margin:4px 0 0;font-size:13px">A <b>broad</b> keyword also hides every keyword and tag containing its word, for everyone who has it: "harem" also hides "Female Harem" and "reverse harem". Click a keyword's "broad" to switch it.</p>
+      <div id="expands" class="muted" style="font-size:13px;margin-top:6px"></div>
+      <div class="switch">
+        <input type="checkbox" id="sexual">
+        <label for="sexual" style="margin:0;font-weight:500">Hide sexual content <span class="muted">(titles AniList marks adult or files under Hentai or Ecchi, MyAnimeList rates Rx or R+, or TMDB marks adult). A backup for titles nobody gave the right keywords.</span></label>
+      </div>
       <label for="search">Add a keyword</label>
       <input id="search" type="search" placeholder="e.g. gore, sexual content…" autocomplete="off">
       <ul class="results" id="results"></ul>
@@ -87,6 +95,10 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const state = { token: sessionStorage.getItem('filters-token'), name: sessionStorage.getItem('filters-name'), doc: null, people: [], names: {}, person: null, draft: null };
+  // "Sexual content" travels in a person's keyword list under this number; it
+  // is shown as its own switch, not as a keyword.
+  const SEXUAL = 999999999;
+  const keywordsOf = (list) => list.filter((id) => id !== SEXUAL);
 
   const status = (el, text, kind) => { el.textContent = text || ''; el.className = 'status' + (kind ? ' ' + kind : ''); };
 
@@ -126,7 +138,8 @@
     const { doc, people } = await api('/filters/content');
     state.doc = doc;
     state.people = people;
-    const ids = Object.values(doc.users).flatMap((u) => u.blockedTags);
+    const ids = [...Object.values(doc.users).flatMap((u) => u.blockedTags), ...Object.values(doc.expansions || {}).flatMap((x) => x.ids)]
+      .filter((id) => id !== SEXUAL && !(id in state.names));
     if (ids.length) Object.assign(state.names, await api('/filters/keyword-names?ids=' + ids.join(',')));
     $('login').hidden = true;
     $('app').hidden = false;
@@ -150,8 +163,8 @@
       b.textContent = p.name;
       const badge = document.createElement('span');
       badge.className = 'badge';
-      const n = entry.blockedTags.length;
-      badge.textContent = [n ? n + ' keyword' + (n === 1 ? '' : 's') : '', entry.hideAdult ? 'adult hidden' : '', p.isAdmin ? 'admin' : ''].filter(Boolean).join(' · ');
+      const n = keywordsOf(entry.blockedTags).length;
+      badge.textContent = [n ? n + ' keyword' + (n === 1 ? '' : 's') : '', entry.blockedTags.includes(SEXUAL) ? 'sexual content hidden' : '', entry.hideAdult ? 'adult hidden' : '', p.isAdmin ? 'admin' : ''].filter(Boolean).join(' · ');
       b.append(badge);
       b.addEventListener('click', () => select(p.id));
       box.append(b);
@@ -176,16 +189,32 @@
   function renderDraft() {
     const chips = $('chips');
     chips.replaceChildren();
-    if (!state.draft.blockedTags.length) {
+    if (!keywordsOf(state.draft.blockedTags).length) {
       const none = document.createElement('span');
       none.className = 'muted';
       none.textContent = 'Nothing hidden.';
       chips.append(none);
     }
-    for (const id of state.draft.blockedTags) {
+    const broad = new Set(state.doc.broadTags || []);
+    const reach = [];
+    for (const id of keywordsOf(state.draft.blockedTags)) {
       const chip = document.createElement('span');
       chip.className = 'chip';
       chip.append(document.createTextNode(state.names[id] || '#' + id));
+      const b = document.createElement('button');
+      b.className = 'broad';
+      b.textContent = 'broad';
+      b.title = 'Also hide every keyword and tag containing this word, for everyone who has it';
+      b.setAttribute('aria-pressed', String(broad.has(id)));
+      b.addEventListener('click', () => toggleBroad(id));
+      chip.append(b);
+      const x0 = (state.doc.expansions || {})[id];
+      if (broad.has(id) && x0) {
+        const more = [...x0.ids.filter((k) => k !== id).map((k) => state.names[k] || '#' + k), ...x0.words];
+        if (more.length) reach.push((state.names[id] || '#' + id) + ' also hides: ' + more.join(', '));
+      } else if (broad.has(id)) {
+        reach.push((state.names[id] || '#' + id) + ': worked out at the next sync');
+      }
       const x = document.createElement('button');
       x.setAttribute('aria-label', 'Remove');
       x.textContent = '×';
@@ -193,7 +222,22 @@
       chip.append(x);
       chips.append(chip);
     }
+    $('expands').textContent = reach.join(' · ');
     $('adult').checked = state.draft.hideAdult;
+    $('sexual').checked = state.draft.blockedTags.includes(SEXUAL);
+  }
+
+  async function toggleBroad(id) {
+    const now = new Set(state.doc.broadTags || []);
+    if (now.has(id)) now.delete(id); else now.add(id);
+    try {
+      const out = await api('/filters/broad', { method: 'PUT', body: JSON.stringify({ ids: [...now] }) });
+      state.doc.broadTags = out.broadTags;
+      renderDraft();
+      status($('save-status'), 'Broad keywords saved for everyone. What they reach shows after the next sync (reload in a minute).', 'ok');
+    } catch (err) {
+      status($('save-status'), err.message, 'error');
+    }
   }
 
   let searchTimer = null;
@@ -226,6 +270,9 @@
   });
 
   $('adult').addEventListener('change', () => { state.draft.hideAdult = $('adult').checked; });
+  $('sexual').addEventListener('change', () => {
+    state.draft.blockedTags = keywordsOf(state.draft.blockedTags).concat($('sexual').checked ? [SEXUAL] : []);
+  });
   $('revert').addEventListener('click', () => select(state.person));
 
   $('save').addEventListener('click', async () => {
