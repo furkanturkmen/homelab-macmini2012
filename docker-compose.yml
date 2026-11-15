@@ -397,7 +397,7 @@ services:
       - "6767:6767"
 
   # Transcribes and translates the audio itself, for the anime nobody ever
-  # subtitled. An anime has no subtitle on any of seven providers,
+  # subtitled. One anime here had no subtitle on any of seven providers,
   # no embedded stream, and no fansub posted to any tracker AnimeTosho
   # mirrors - so there is nothing left to find, only something to make.
   #
@@ -615,11 +615,11 @@ services:
     # from it was tried on 2026-09-04 and reverted, because TMDB's keywords do
     # not separate what they look like they separate:
     #
-    #   An anime  ecchi                             (hentai)
-    #   An anime     ecchi                             (mainstream)
-    #   An anime      ecchi, erotic                     (mainstream)
-    #   A film  erotic
-    #   An anime            softcore, ecchi, hentai, erotic
+    #   a hentai anime       ecchi                            (hentai)
+    #   a mainstream anime   ecchi                            (mainstream)
+    #   another anime        ecchi, erotic                    (mainstream)
+    #   a film               erotic
+    #   another hentai anime softcore, ecchi, hentai, erotic
     #
     # The first two carry an identical keyword set, so no subset hides one and
     # shows the other. Separating those needs a per-title exception.
