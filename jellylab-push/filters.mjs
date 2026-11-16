@@ -631,6 +631,18 @@ async function saveSexualCache(cache) {
 }
 
 const fresh = (entry) => entry && Date.now() - entry.at < 30 * DAY;
+
+/*
+ * One sexual-content lookup at a time. seerr-guard asks about every anime on a
+ * search page at once; each lookup reads, changes and rewrites the same cache
+ * file, and side by side they wrote over each other's file and failed.
+ */
+let sexualQueue = Promise.resolve();
+function oneAtATime(fn) {
+  const run = sexualQueue.then(fn);
+  sexualQueue = run.catch(() => {});
+  return run;
+}
 // An AniList entry saved before tags were kept is asked again.
 const freshAniList = (entry) => fresh(entry) && Array.isArray(entry.tags);
 
@@ -644,7 +656,11 @@ const plain = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[^
  * a wrong link would judge one title by another's tags. Kept for 30 days,
  * a miss included.
  */
-export async function linkAniList(title, year) {
+export function linkAniList(title, year) {
+  return oneAtATime(() => linkAniListNow(title, year));
+}
+
+async function linkAniListNow(title, year) {
   const cache = await loadSexualCache();
   cache.links ??= {};
   const key = `${plain(title)}:${year ?? ''}`;
@@ -693,7 +709,11 @@ export async function sexualVerdictFor({ title, originalTitle, year }) {
  * AniList ids -> reasons a title is sexual content ([] when it is not, absent
  * when nothing could be learned about it).
  */
-async function sexualVerdicts(anilistIds) {
+function sexualVerdicts(anilistIds) {
+  return oneAtATime(() => sexualVerdictsNow(anilistIds));
+}
+
+async function sexualVerdictsNow(anilistIds) {
   const cache = await loadSexualCache();
   const ids = [...new Set(anilistIds)];
   const missing = ids.filter(id => !freshAniList(cache.anilist[id]));

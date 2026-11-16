@@ -230,3 +230,10 @@ test('once MyAnimeList answers, its R+ rating counts', async () => {
   assert.deepEqual(tags.i3, ['sexual content']);
   assert.deepEqual(out.sexual.find((s) => s.item === 'Mild series').why, ['MyAnimeList: R+ (mild nudity)']);
 });
+
+test('many lookups at once, as a Seerr search page makes them, all succeed', async () => {
+  const answers = await Promise.all(Array.from({ length: 5 }, () => filters.sexualVerdictFor({ title: 'Anime Film', year: 1998 })));
+  for (const a of answers) assert.deepEqual(a, { anilist: 60, why: ['AniList: Rape 77%'] });
+  const unknown = await filters.sexualVerdictFor({ title: 'Nothing Like It', year: 1999 });
+  assert.deepEqual(unknown, { anilist: null, why: [] }, 'no single AniList match: nothing to judge');
+});
