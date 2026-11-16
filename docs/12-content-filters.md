@@ -63,6 +63,15 @@ adult flag, and anime (TMDB "anime" keyword) also by asking jellylab-push for
 the same AniList/MyAnimeList verdict, found by title and year; once in the
 library, Jellyfin's verdict applies.
 
+**Always show, per person.** A person can be given titles they may see even
+though their filters would hide them (Food Wars for one person, not another).
+In Seerr the guard skips their content filters for those titles. In Jellyfin,
+where tags belong to the title, the sync renames every tag anybody blocks on
+such a title to a variant ("ecchi" becomes "ecchi (Food Wars)") and adds the
+variants to the blocked lists of everyone else who blocks the word, so for them
+nothing changes. Metadata tags it renames are remembered and put back when the
+exception goes. Library access and age limits still apply.
+
 **Jellyfin's own limits count in Seerr too.** A person's Jellyfin settings
 (Dashboard › Users › the person › *Parental control* and *Access*) also apply
 in Seerr, with or without a keyword filter:

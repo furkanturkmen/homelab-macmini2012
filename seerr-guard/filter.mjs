@@ -88,6 +88,9 @@ export function readStore(text) {
       name: typeof entry.name === 'string' ? entry.name : '',
       blockedTags: parseIds(entry.blockedTags),
       hideAdult: entry.hideAdult === true,
+      // Titles this person may always see, whatever the content filters say.
+      allow: new Set((Array.isArray(entry.allowTitles) ? entry.allowTitles : [])
+        .map((t) => String(t?.key ?? '')).filter((k) => /^(movie|tv):\d+$/.test(k))),
     });
   }
   const adultTags = parseIds(doc.adultTags);

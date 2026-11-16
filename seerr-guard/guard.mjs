@@ -1127,7 +1127,11 @@ async function handle(req, res) {
   }
   if (!hidden.size && !rules) return streamProxy(req, res);
 
-  const byKeywords = hidden.size ? makeHider(hidden, verdictView) : () => false;
+  // A title this person may always see skips the content filters (keywords,
+  // sexual content). Their Jellyfin rules - library, age - still apply.
+  const allow = entryForUser(state.store, user)?.allow ?? new Set();
+  const filtered = hidden.size ? makeHider(hidden, verdictView) : () => false;
+  const byKeywords = (key) => !allow.has(key) && filtered(key);
   const hide = rules ? (key) => byKeywords(key) || rulesHide(rules, key) : byKeywords;
   const ctx = { user, hidden, hide };
   switch (route.kind) {

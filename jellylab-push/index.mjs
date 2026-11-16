@@ -1069,7 +1069,7 @@ async function cancel({ tmdbId, type, season }) {
 }
 
 /** Routes that belong to the filter page and answer only on the home network. */
-const FILTER_PAGE_ROUTES = new Set(['/filters/admin', '/filters/login', '/filters/logout', '/filters/content', '/filters/keywords', '/filters/keyword-names']);
+const FILTER_PAGE_ROUTES = new Set(['/filters/admin', '/filters/login', '/filters/logout', '/filters/titles', '/filters/content', '/filters/keywords', '/filters/keyword-names']);
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -1329,6 +1329,15 @@ const server = createServer(async (req, res) => {
       await filters.requireAdmin(token);
       const [doc, people] = await Promise.all([filters.loadContent(), filters.jellyfinPeople(token)]);
       return send(res, 200, { doc, people });
+    } catch (err) {
+      return send(res, err.status ?? 500, { error: err.message });
+    }
+  }
+
+  if (url.pathname === '/filters/titles' && req.method === 'GET') {
+    try {
+      await filters.requireAdmin(req.headers['x-emby-token']);
+      return send(res, 200, await filters.searchTitles(url.searchParams.get('query')));
     } catch (err) {
       return send(res, err.status ?? 500, { error: err.message });
     }

@@ -283,12 +283,12 @@ const STAMPS = process.env.FILTER_STAMPS_PATH || '/data/filter-stamps.json';
 async function loadStamps() {
   try {
     const doc = JSON.parse(await readFile(STAMPS, 'utf8'));
-    return { items: doc.items ?? {}, users: doc.users ?? {} };
+    return { items: doc.items ?? {}, users: doc.users ?? {}, restore: doc.restore ?? {} };
   } catch (e) {
     // Missing is the first run. Unreadable is not guessed at: a wrong record
     // could remove tags the sync never added.
     if (e.code !== 'ENOENT') throw e;
-    return { items: {}, users: {} };
+    return { items: {}, users: {}, restore: {} };
   }
 }
 
@@ -336,6 +336,21 @@ export const SEXUAL_CONTENT_NAME = 'sexual content';
 
 const isIdList = (v) => Array.isArray(v) && v.every(t => Number.isInteger(t) && t > 0);
 
+/*
+ * Titles a person may always see, whatever their keywords and the sexual
+ * content check say ("tv:61374", Food Wars, for one person only). Library
+ * access and age limits still apply: those are Jellyfin's own settings.
+ */
+const TITLE_KEY = /^(movie|tv):\d+$/;
+export function cleanAllowTitles(list) {
+  const seen = new Map();
+  for (const t of Array.isArray(list) ? list : []) {
+    const key = String(t?.key ?? '').trim();
+    if (TITLE_KEY.test(key) && !seen.has(key)) seen.set(key, { key, name: String(t?.name ?? key).trim() || key });
+  }
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function validateContent(doc) {
   if (!doc || typeof doc !== 'object') return 'store must be an object';
   // Keywords whose word also blocks every tag and keyword containing it, and
@@ -360,6 +375,10 @@ export function validateContent(doc) {
       return `users.${id}.blockedTags must be positive integers`;
     }
     if (typeof entry.hideAdult !== 'boolean') return `users.${id}.hideAdult must be a boolean`;
+    if ('allowTitles' in entry && (!Array.isArray(entry.allowTitles)
+      || entry.allowTitles.some(t => !t || !TITLE_KEY.test(t.key) || typeof t.name !== 'string'))) {
+      return `users.${id}.allowTitles must be a list of { key: "movie:123" or "tv:123", name }`;
+    }
   }
   if (!Array.isArray(doc.adultTags)) return 'adultTags must be an array';
   return null;
@@ -404,6 +423,7 @@ export function withPersonChange(doc, jellyfinUserId, changes) {
     ...(typeof changes.name === 'string' && changes.name.trim() ? { name: changes.name.trim() } : {}),
     ...('blockedTags' in changes ? { blockedTags: parseIds(changes.blockedTags) } : {}),
     ...('hideAdult' in changes ? { hideAdult: changes.hideAdult === true } : {}),
+    ...('allowTitles' in changes ? { allowTitles: cleanAllowTitles(changes.allowTitles) } : {}),
   };
   const users = { ...doc.users };
   if (!next.blockedTags.length && !next.hideAdult) delete users[jellyfinUserId];
@@ -992,26 +1012,82 @@ export async function syncContentFilters(token) {
     }
   }
 
+  /*
+   * Per-person exceptions ("always show Food Wars to Dalia"). Tags belong to
+   * the title, not the person, so on a title somebody may always see, every
+   * tag anybody blocks is renamed to a variant of its own - "ecchi" becomes
+   * "ecchi (Food Wars)". The people allowed it no longer match it; everyone
+   * else who blocks "ecchi" also gets "ecchi (Food Wars)" in their blocked list
+   * below, so for them nothing changes. A tag that came from the metadata and
+   * was renamed is remembered, to be put back when nobody allows the title any
+   * more. Library access and age limits are untouched.
+   */
+  const markersOf = new Map(jfUsers.map(u => [u.Id, [...new Set([...(byJellyfinId.get(u.Id) ?? []).map(tagOf), ...expandedWordsFor(doc, u.Id)])]]));
+  const blocksOf = new Map(jfUsers.map(u => [u.Id, new Set([...(markersOf.get(u.Id) ?? []), ...(u.Policy?.BlockedTags ?? [])].map(t => lower(t).trim()))]));
+  const anyoneBlocks = new Set([...blocksOf.values()].flatMap(s => [...s]));
+  const allowersOf = new Map();
+  for (const [id, entry] of Object.entries(doc.users)) {
+    for (const t of entry.allowTitles ?? []) {
+      if (!allowersOf.has(t.key)) allowersOf.set(t.key, new Set());
+      allowersOf.get(t.key).add(id);
+    }
+  }
+  const variantOf = (tag, item) => asTag(`${tag} (${item.Name})`);
+  const allowedTitles = []; // { allowedBy, variants: Map(lower blocked word -> variant) }
+  stamps.restore ??= {};
+
   const stamped = [];
   const writeFailures = [];
   const cleared = [];
-  for (const { item } of library) {
+  for (const { item, tmdbId, mediaType } of library) {
     const current = new Set(item.Tags ?? []);
     const has = new Set([...current].map(lower));
     const mine = new Set(stamps.items[item.Id] ?? []);
+    const restore = stamps.restore[item.Id] ?? [];
     let want;
     if (!union.size) want = new Set();
     else if (keywordsOf.has(item.Id)) want = new Set(keywordsOf.get(item.Id).filter(id => union.has(id)).map(tagOf));
     else continue; // keywords unknown: leave this item exactly as it is
     const wantLower = new Set([...want].map(lower));
-    const toAdd = [...want].filter(t => !has.has(lower(t)));
     // Old markers always go; a word only when this sync added it and it is no
     // longer wanted.
     // "sexual content" comes from nowhere but this sync, so it is always its
     // own, on record or not (a run that stopped halfway leaves it unrecorded).
     const own = (t) => mine.has(t) || lower(t) === SEXUAL_CONTENT_NAME;
-    const toRemove = [...current].filter(t => String(t).startsWith(MARKER_PREFIX) || (own(t) && !wantLower.has(lower(t))));
-    const nowMine = [...current].filter(t => own(t) && !toRemove.includes(t)).concat(toAdd);
+
+    // What the title carries without any exception: its own tags minus what
+    // this sync no longer wants, metadata tags an earlier exception renamed put
+    // back, and the wanted words it is missing.
+    const base = [...current].filter(t => !String(t).startsWith(MARKER_PREFIX) && !(own(t) && !wantLower.has(lower(t))));
+    const baseLower = new Set(base.map(lower));
+    for (const t of [...restore, ...want]) if (!baseLower.has(lower(t))) { base.push(t); baseLower.add(lower(t)); }
+
+    // With an exception: every tag anybody blocks becomes its variant.
+    const allowedBy = allowersOf.get(`${mediaType}:${tmdbId}`);
+    let final = base;
+    let variants = new Set();
+    if (allowedBy?.size) {
+      const map = new Map();
+      final = base.map(t => {
+        if (!anyoneBlocks.has(lower(t).trim())) return t;
+        const v = variantOf(t, item);
+        map.set(lower(t).trim(), v);
+        variants.add(v);
+        return v;
+      });
+      allowedTitles.push({ allowedBy, variants: map });
+      // Metadata tags renamed now, kept to be put back later.
+      const native = base.filter(t => anyoneBlocks.has(lower(t).trim()) && !own(t) && !wantLower.has(lower(t)));
+      stamps.restore[item.Id] = [...new Set([...restore, ...native])];
+    } else {
+      delete stamps.restore[item.Id];
+    }
+
+    const finalLower = new Set(final.map(lower));
+    const toAdd = final.filter(t => !has.has(lower(t)));
+    const toRemove = [...current].filter(t => !finalLower.has(lower(t)));
+    // Ours: what this sync added or renamed, never a tag from the metadata.
+    const nowMine = final.filter(t => own(t) || variants.has(t) || (toAdd.includes(t) && !restore.includes(t)));
     const record = (tags) => {
       if (tags.length) stamps.items[item.Id] = tags;
       else delete stamps.items[item.Id];
@@ -1035,10 +1111,7 @@ export async function syncContentFilters(token) {
       const { Trickplay, ...full } = await jellyfin(`/Users/${admin.Id}/Items/${item.Id}`, token);
       await jellyfin(`/Items/${item.Id}`, token, {
         method: 'POST',
-        body: JSON.stringify({
-          ...full,
-          Tags: [...current].filter(t => !toRemove.includes(t)).concat(toAdd),
-        }),
+        body: JSON.stringify({ ...full, Tags: final }),
       });
     } catch (err) {
       writeFailures.push({ item: item.Name, error: err.message });
@@ -1051,6 +1124,7 @@ export async function syncContentFilters(token) {
   // Titles no longer in the library leave no record behind.
   const inLibrary = new Set(library.map(({ item }) => item.Id));
   for (const id of Object.keys(stamps.items)) if (!inLibrary.has(id)) delete stamps.items[id];
+  for (const id of Object.keys(stamps.restore)) if (!inLibrary.has(id)) delete stamps.restore[id];
   await saveStamps(stamps);
 
   /* ------------------------------------------- block the markers per user */
@@ -1061,7 +1135,13 @@ export async function syncContentFilters(token) {
      * the person it affects, and an administrator who has asked for nothing
      * resolves to an empty list, which leaves their policy exactly as it was.
      */
-    const markers = [...new Set([...(byJellyfinId.get(u.Id) ?? []).map(tagOf), ...expandedWordsFor(doc, u.Id)])];
+    // Their own words, plus the variant of each word they block on every title
+    // somebody else may always see and they may not.
+    const blocks = blocksOf.get(u.Id) ?? new Set();
+    const variantsFor = allowedTitles
+      .filter(t => !t.allowedBy.has(u.Id))
+      .flatMap(t => [...t.variants].filter(([w]) => blocks.has(w)).map(([, v]) => v));
+    const markers = [...new Set([...(markersOf.get(u.Id) ?? []), ...variantsFor])];
     /*
      * Only what this service manages is changed: old markers, and the words it
      * put there before. Anything else an administrator blocked by hand in
@@ -1097,6 +1177,20 @@ export async function syncContentFilters(token) {
 }
 
 /* ------------------------------------------------ for the filter page */
+
+/** Films and series matching a search, through Seerr, for "always show". */
+export async function searchTitles(query) {
+  const q = String(query ?? '').trim();
+  if (!q) return [];
+  const body = await seerr(`/search?query=${encodeURIComponent(q)}&page=1`);
+  return (body.results ?? [])
+    .filter(r => (r.mediaType === 'movie' || r.mediaType === 'tv') && Number.isInteger(r.id))
+    .map(r => {
+      const year = String(r.releaseDate ?? r.firstAirDate ?? '').slice(0, 4);
+      const name = r.title ?? r.name ?? `${r.mediaType} ${r.id}`;
+      return { key: `${r.mediaType}:${r.id}`, name: year ? `${name} (${year})` : name, kind: r.mediaType === 'tv' ? 'series' : 'film' };
+    });
+}
 
 /** TMDB keywords matching a search, through Seerr. */
 export async function searchKeywords(query) {

@@ -564,3 +564,20 @@ test('an anime jellylab-push calls sexual content is hidden before it is in the 
   assert.equal((await get('/api/v1/tv/701', as('kid'))).status, 200, 'a clean anime stays');
   assert.equal((await get('/api/v1/tv/700', as('admin'))).status, 200, 'nobody else is affected');
 });
+
+test('a title someone may always see skips their content filters, and only theirs', async () => {
+  const original = await readFile(storePath, 'utf8');
+  const doc = JSON.parse(original);
+  doc.users.kid.allowTitles = [{ key: 'movie:100', name: 'Movie 100' }];
+  await writeFile(storePath, JSON.stringify(doc));
+  await new Promise((r) => setTimeout(r, 300));
+  try {
+    assert.equal((await get('/api/v1/movie/100', as('kid'))).status, 200, 'blocked by keyword 5, but allowed for this person');
+    const list = await (await get('/api/v1/search', as('kid'))).json();
+    assert.deepEqual(ids(list), [100, 200], 'and it shows in lists');
+  } finally {
+    await writeFile(storePath, original);
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  assert.equal((await get('/api/v1/movie/100', as('kid'))).status, 404, 'hidden again once the exception is gone');
+});

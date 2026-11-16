@@ -106,6 +106,13 @@
       <input id="search" type="search" placeholder="Type at least 2 letters, e.g. gore" autocomplete="off">
       <ul class="results" id="results"></ul>
 
+      <h3>Always show <span class="count" id="allow-count"></span></h3>
+      <p class="hint">Titles this person may see even though the filters above would hide them. Only for this person; library access and age limits still apply.</p>
+      <div class="chips" id="allow-chips"></div>
+      <label for="title-search">Add a title</label>
+      <input id="title-search" type="search" placeholder="Type at least 2 letters, e.g. Food Wars" autocomplete="off">
+      <ul class="results" id="title-results"></ul>
+
       <details class="more">
         <summary>More options</summary>
         <div class="switch">
@@ -195,7 +202,7 @@
   }
 
   function entryFor(id) {
-    return state.doc.users[id] || { blockedTags: [], hideAdult: false };
+    return state.doc.users[id] || { blockedTags: [], hideAdult: false, allowTitles: [] };
   }
 
   const nameOf = (id) => state.names[id] || 'keyword ' + id;
@@ -244,7 +251,7 @@
     if (!person) return;
     state.person = id;
     const entry = entryFor(id);
-    state.draft = { blockedTags: [...entry.blockedTags], hideAdult: entry.hideAdult };
+    state.draft = { blockedTags: [...entry.blockedTags], hideAdult: entry.hideAdult, allowTitles: [...(entry.allowTitles || [])] };
     $('editing').textContent = 'Filter for ' + person.name;
     $('editor').hidden = false;
     $('search').value = '';
@@ -343,7 +350,61 @@
     }
     $('adult').checked = state.draft.hideAdult;
     $('sexual').checked = state.draft.blockedTags.includes(SEXUAL);
+    renderAllow();
   }
+
+  function renderAllow() {
+    const box = $('allow-chips');
+    box.replaceChildren();
+    const list = state.draft.allowTitles || [];
+    $('allow-count').textContent = list.length ? '(' + list.length + ')' : '';
+    if (!list.length) {
+      const none = document.createElement('span');
+      none.className = 'muted';
+      none.textContent = 'None.';
+      box.append(none);
+    }
+    for (const t of list) {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.append(document.createTextNode(t.name));
+      const x = document.createElement('button');
+      x.setAttribute('aria-label', 'Remove ' + t.name);
+      x.textContent = '×';
+      x.addEventListener('click', () => { state.draft.allowTitles = list.filter((a) => a.key !== t.key); renderAllow(); });
+      chip.append(x);
+      box.append(chip);
+    }
+  }
+
+  let titleTimer = null;
+  $('title-search').addEventListener('input', () => {
+    clearTimeout(titleTimer);
+    const q = $('title-search').value.trim();
+    if (q.length < 2) { $('title-results').replaceChildren(); return; }
+    titleTimer = setTimeout(async () => {
+      try {
+        const found = await api('/filters/titles?query=' + encodeURIComponent(q));
+        const list = $('title-results');
+        list.replaceChildren();
+        for (const t of found.slice(0, 15)) {
+          const li = document.createElement('li');
+          const b = document.createElement('button');
+          const has = () => (state.draft.allowTitles || []).some((a) => a.key === t.key);
+          b.textContent = t.name + ' · ' + t.kind + (has() ? '  ✓' : '');
+          b.addEventListener('click', () => {
+            if (!has()) state.draft.allowTitles = [...(state.draft.allowTitles || []), { key: t.key, name: t.name }];
+            renderAllow();
+            b.textContent = t.name + ' · ' + t.kind + '  ✓';
+          });
+          li.append(b);
+          list.append(li);
+        }
+      } catch (err) {
+        status($('save-status'), err.message, 'error');
+      }
+    }, 300);
+  });
 
   // Un-choose (on = true) or choose again something a broad keyword reaches.
   async function setExcept(item, on) {
@@ -369,7 +430,7 @@
   $('start-from').addEventListener('change', () => {
     const from = state.doc.users[$('start-from').value];
     if (!from) return;
-    state.draft = { blockedTags: [...from.blockedTags], hideAdult: from.hideAdult };
+    state.draft = { blockedTags: [...from.blockedTags], hideAdult: from.hideAdult, allowTitles: [...(from.allowTitles || [])] };
     renderDraft();
     const who = state.people.find((p) => p.id === $('start-from').value);
     status($('save-status'), 'Copied from ' + (who ? who.name : 'that person') + '. Press Save to keep it.', 'ok');
