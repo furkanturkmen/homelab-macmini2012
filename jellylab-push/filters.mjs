@@ -616,10 +616,10 @@ export function sexualFrom({ anilist, malRating }) {
 async function loadSexualCache() {
   try {
     const doc = JSON.parse(await readFile(SEXUAL_CACHE, 'utf8'));
-    return { anilist: doc.anilist ?? {}, mal: doc.mal ?? {} };
+    return { anilist: doc.anilist ?? {}, mal: doc.mal ?? {}, links: doc.links ?? {} };
   } catch (e) {
     if (e.code !== 'ENOENT') throw e;
-    return { anilist: {}, mal: {} };
+    return { anilist: {}, mal: {}, links: {} };
   }
 }
 
@@ -633,6 +633,44 @@ async function saveSexualCache(cache) {
 const fresh = (entry) => entry && Date.now() - entry.at < 30 * DAY;
 // An AniList entry saved before tags were kept is asked again.
 const freshAniList = (entry) => fresh(entry) && Array.isArray(entry.tags);
+
+const ANIME_KEYWORD = 210024;
+const plain = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, '');
+
+/**
+ * The AniList entry for an anime Jellyfin never linked - an anime film in the
+ * Movies library has no AniList id, only the Anime library gets them. Found by
+ * title and year, and only taken when exactly one AniList entry matches both:
+ * a wrong link would judge one title by another's tags. Kept for 30 days,
+ * a miss included.
+ */
+export async function linkAniList(title, year) {
+  const cache = await loadSexualCache();
+  cache.links ??= {};
+  const key = `${plain(title)}:${year ?? ''}`;
+  if (fresh(cache.links[key])) return cache.links[key].id;
+  let id = null;
+  try {
+    const res = await fetch(ANILIST_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        query: 'query($q:String){Page(perPage:10){media(search:$q,type:ANIME){id startDate{year} title{romaji english native}}}}',
+        variables: { q: String(title) },
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) throw new Error(`anilist answered ${res.status}`);
+    const found = ((await res.json())?.data?.Page?.media ?? []).filter(m =>
+      m.startDate?.year === year && Object.values(m.title ?? {}).some(t => t && plain(t) === plain(title)));
+    if (found.length === 1) id = found[0].id;
+  } catch {
+    return null; // not kept: asked again next run
+  }
+  cache.links[key] = { id, at: Date.now() };
+  await saveSexualCache(cache).catch(() => {});
+  return id;
+}
 
 /**
  * AniList ids -> reasons a title is sexual content ([] when it is not, absent
@@ -864,6 +902,13 @@ export async function syncContentFilters(token) {
     const anilistOf = new Map(library
       .map(({ item }) => [item.Id, Number(item.ProviderIds?.AniList)])
       .filter(([, a]) => Number.isInteger(a) && a > 0));
+    // Anime Jellyfin did not link to AniList (anime films in the Movies
+    // library): TMDB calls them anime, so AniList is asked by title and year.
+    for (const { item } of library) {
+      if (anilistOf.has(item.Id) || !(keywordsOf.get(item.Id) ?? []).includes(ANIME_KEYWORD)) continue;
+      const a = await linkAniList(item.Name, item.ProductionYear);
+      if (a) anilistOf.set(item.Id, a);
+    }
     const verdicts = await sexualVerdicts([...anilistOf.values()]);
     for (const [itemId, a] of anilistOf) {
       const why = verdicts.get(a) ?? [];

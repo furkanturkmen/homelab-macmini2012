@@ -8,6 +8,8 @@
  *   i3  a series MyAnimeList rates R+      - sexual content, once MyAnimeList answers
  *   i4  a film TMDB marks adult            - sexual content
  *   i5  a series with TMDB "reverse harem" - reached by the broad "harem"
+ *   i6  an anime film Jellyfin never linked to AniList - found by title and year, tagged Rape
+ *   i7  a live-action film                 - not anime, AniList is never asked
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,13 +35,18 @@ const ITEMS = [
   { Id: 'i3', Name: 'Mild series', Type: 'Series', ProviderIds: { Tmdb: '3', AniList: '51' }, Tags: [] },
   { Id: 'i4', Name: 'Adult film', Type: 'Movie', ProviderIds: { Tmdb: '4' }, Tags: [] },
   { Id: 'i5', Name: 'Reverse series', Type: 'Series', ProviderIds: { Tmdb: '5' }, Tags: [] },
+  { Id: 'i6', Name: 'Anime Film', Type: 'Movie', ProductionYear: 1998, ProviderIds: { Tmdb: '6' }, Tags: [] },
+  { Id: 'i7', Name: 'Live Film', Type: 'Movie', ProductionYear: 2015, ProviderIds: { Tmdb: '7' }, Tags: [] },
 ];
+const searched = [];
 const DETAILS = {
   'movie:1': { keywords: [] },
   'tv:2': { keywords: [] },
   'tv:3': { keywords: [] },
   'movie:4': { keywords: [], adult: true },
   'tv:5': { keywords: [{ id: 777, name: 'reverse harem' }] },
+  'movie:6': { keywords: [{ id: 210024, name: 'anime' }] },
+  'movie:7': { keywords: [{ id: 570, name: 'rape' }] },
 };
 const KEYWORD_NAMES = { 9194: 'harem', 777: 'reverse harem' };
 
@@ -96,9 +103,18 @@ before(async () => {
   });
   const anilist = await serve(async (req, res) => {
     const { variables } = await readAll(req);
+    if (variables.q) {
+      searched.push(variables.q);
+      // Same title, two years: only the 1998 one is taken.
+      return json(res, 200, { data: { Page: { media: [
+        { id: 60, startDate: { year: 1998 }, title: { romaji: 'ANIME FILM', english: null, native: null } },
+        { id: 61, startDate: { year: 2005 }, title: { romaji: 'Anime Film', english: null, native: null } },
+      ] } } });
+    }
     const known = {
       50: { id: 50, isAdult: false, genres: ['Ecchi', 'Comedy'], idMal: 500 },
       51: { id: 51, isAdult: false, genres: ['Action'], idMal: 510 },
+      60: { id: 60, isAdult: false, genres: ['Drama'], idMal: null, tags: [{ name: 'Rape', rank: 77 }] },
     };
     return json(res, 200, { data: { Page: { media: variables.ids.map((id) => known[id]).filter(Boolean) } } });
   });
@@ -178,6 +194,9 @@ test('broad words and sexual content, with MyAnimeList down', async () => {
   assert.deepEqual(tags.i5, ['reverse harem'], 'a TMDB keyword containing the broad word');
   assert.equal('i3' in tags, false, 'MyAnimeList did not answer: nothing learned, nothing added');
   assert.equal('i1' in tags, false);
+  assert.deepEqual(tags.i6, ['sexual content'], 'linked to AniList by title and year, then judged by its tags');
+  assert.equal('i7' in tags, false, 'live action: not on AniList, judged by its keywords only');
+  assert.deepEqual(searched, ['Anime Film'], 'only the anime without a link is searched for');
 
   const blocked = writes.policies.find((w) => w.id === 'kid-0000-00000001').policy.BlockedTags.sort();
   assert.deepEqual(blocked, ['Female Harem', 'harem', 'reverse harem', 'sexual content'],
@@ -186,7 +205,7 @@ test('broad words and sexual content, with MyAnimeList down', async () => {
   const store = JSON.parse(await readFile(process.env.CONTENT_FILTERS_PATH, 'utf8'));
   assert.deepEqual(store.expansions, { 9194: { ids: [777, 9194], words: ['Female Harem'] } }, 'saved for seerr-guard');
   assert.deepEqual(filters.hiddenIdsFor(store, 'kid-0000-00000001'), [777, 9194, SEXUAL]);
-  assert.deepEqual(out.sexual.map((s) => s.item), ['Harem series']);
+  assert.deepEqual(out.sexual.map((s) => s.item).sort(), ['Anime Film', 'Harem series']);
 });
 
 test('once MyAnimeList answers, its R+ rating counts', async () => {

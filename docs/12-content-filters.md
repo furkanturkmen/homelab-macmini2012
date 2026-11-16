@@ -49,7 +49,9 @@ words like these; "school" would reach far too much.
 content*: titles AniList marks adult, files under Hentai or Ecchi, or tags
 with rape, incest or prostitution (any strength) or nudity (from 50% of
 voters); that MyAnimeList rates Rx or R+; or that TMDB marks adult, whatever
-their keywords. The AniList tags and strengths are `SEXUAL_TAGS` in
+their keywords. An anime Jellyfin did not link to AniList (an anime film in
+the Movies library) is looked up there by title and year, and only taken when
+exactly one entry matches both. The AniList tags and strengths are `SEXUAL_TAGS` in
 `jellylab-push/filters.mjs`. It
 catches titles nobody gave the right keywords. AniList and MyAnimeList answers
 are kept for 30 days (`jellylab-push-data/sexual-content.json`); MyAnimeList's
