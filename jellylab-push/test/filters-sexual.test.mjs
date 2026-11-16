@@ -244,3 +244,21 @@ test('a keyword name with a comma never becomes two blocked words', () => {
   assert.equal(filters.tagFor(1, { 1: 'oral sex' }), 'oral sex');
   assert.equal(filters.tagFor(1, {}), 'keyword 1');
 });
+
+test('un-chosen reach of a broad keyword is no longer hidden, and can be chosen again', async () => {
+  await filters.setBroadExcept({ ids: [777], words: ['Female Harem'] });
+  writes.policies.length = 0;
+  await filters.syncContentFilters('token');
+  let store = JSON.parse(await readFile(process.env.CONTENT_FILTERS_PATH, 'utf8'));
+  assert.deepEqual(store.expansions[9194].ids, [9194], '"reverse harem" no longer reached');
+  assert.deepEqual(store.expansions[9194].words, [], '"Female Harem" no longer reached');
+  assert.equal(store.expansions[9194].names[777], 'reverse harem', 'its name is kept, so the page can offer it back');
+  let blocked = writes.policies.find((w) => w.id === 'kid-0000-00000001')?.policy.BlockedTags ?? [];
+  assert.equal(blocked.includes('reverse harem') || blocked.includes('Female Harem'), false);
+
+  await filters.setBroadExcept({ ids: [], words: [] });
+  writes.policies.length = 0;
+  await filters.syncContentFilters('token');
+  store = JSON.parse(await readFile(process.env.CONTENT_FILTERS_PATH, 'utf8'));
+  assert.deepEqual(store.expansions[9194].ids, [777, 9194], 'chosen again');
+});

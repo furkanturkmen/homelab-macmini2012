@@ -49,7 +49,10 @@
   details.more summary { cursor:pointer; color:var(--muted); font-size:14px; }
   #expands details { font-size:13px; color:var(--muted); margin:4px 0; }
   #expands summary { cursor:pointer; }
-  #expands .list { margin:4px 0 6px 14px; line-height:1.6; }
+  #expands .list { margin:4px 0 6px 14px; line-height:1.6; display:flex; flex-wrap:wrap; gap:4px; align-items:center; }
+  .pill { background:transparent; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:2px 9px; font-size:12px; font-weight:400; }
+  .pill.on { color:var(--ink); font-weight:700; background:var(--bg); }
+  .pill:hover { border-color:var(--accent); }
   select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); }
   .people-group { font-size:12px; color:var(--muted); width:100%; margin-top:6px; }
 </style>
@@ -95,7 +98,7 @@
       </div>
 
       <h3>Hidden keywords <span class="count" id="kw-count"></span></h3>
-      <p class="hint">Click <b>broad</b> on a keyword to also hide everything containing its word ("harem" also hides "Female Harem"). Broad is shared: it applies to everyone who has that keyword.</p>
+      <p class="hint">Click <b>broad</b> on a keyword to also hide everything containing its word ("harem" also hides "Female Harem"). Open a broad keyword below to see what it reaches: <b>bold</b> is hidden, plain is not; click one to switch it. Both are shared by everyone who has that keyword.</p>
       <div class="chips" id="chips"></div>
       <div id="expands"></div>
 
@@ -299,24 +302,68 @@
 
       // What a broad keyword reaches, folded: "harem → 9 more", open for the list.
       if (!broad.has(id)) continue;
+      // Each item can be un-chosen (and chosen again) with a click.
       const x0 = (state.doc.expansions || {})[id];
-      const more = x0 ? [...new Set([...x0.ids.filter((k) => k !== id).map(nameOf), ...x0.words])].sort((a, c) => a.localeCompare(c)) : null;
-      if (more && !more.length) continue; // reaches nothing beyond itself: nothing to show
+      const except = state.doc.broadExcept || { ids: [], words: [] };
+      const exceptWords = new Set((except.words || []).map((w) => w.toLowerCase()));
+      const more = x0 ? [
+        ...x0.ids.filter((k) => k !== id).map((k) => ({ label: nameOf(k), kind: 'ids', value: k })),
+        ...x0.words.map((w) => ({ label: w, kind: 'words', value: w })),
+      ].sort((a, c) => a.label.localeCompare(c.label)) : null;
+      // Un-chosen items this word would otherwise reach (names are kept for them).
+      const off = x0 ? [
+        ...(except.ids || []).filter((k) => x0.names && k in x0.names).map((k) => ({ label: x0.names[k], kind: 'ids', value: k })),
+        ...(except.words || []).filter((w) => w.toLowerCase().split(/\s+/).includes(nameOf(id).toLowerCase()) || w.toLowerCase().includes(nameOf(id).toLowerCase()))
+          .map((w) => ({ label: w, kind: 'words', value: w })),
+      ].sort((a, c) => a.label.localeCompare(c.label)) : [];
+      if (more && !more.length && !off.length) continue; // reaches nothing beyond itself: nothing to show
       const d = document.createElement('details');
       const s = document.createElement('summary');
       if (!more) s.textContent = nameOf(id) + ' → worked out at the next sync';
-      else s.textContent = nameOf(id) + ' → ' + more.length + ' more';
+      else s.textContent = nameOf(id) + ' → ' + more.length + ' more hidden' + (off.length ? ', ' + off.length + ' not' : '');
       d.append(s);
-      if (more && more.length) {
+      // One list: bold is hidden, plain is not. A click switches it, for everyone.
+      if (more) {
         const list = document.createElement('div');
         list.className = 'list';
-        list.textContent = more.join(', ');
+        const items = [...more.map((i) => ({ ...i, on: true })), ...off.map((i) => ({ ...i, on: false }))]
+          .sort((a, c) => a.label.localeCompare(c.label));
+        for (const item of items) {
+          const p = document.createElement('button');
+          p.className = 'pill' + (item.on ? ' on' : '');
+          p.textContent = item.label;
+          p.setAttribute('aria-pressed', String(item.on));
+          p.title = item.on ? 'Hidden. Click to stop hiding it (for everyone).' : 'Not hidden. Click to hide it again.';
+          p.addEventListener('click', () => setExcept(item, item.on));
+          list.append(p);
+        }
         d.append(list);
       }
       expands.append(d);
     }
     $('adult').checked = state.draft.hideAdult;
     $('sexual').checked = state.draft.blockedTags.includes(SEXUAL);
+  }
+
+  // Un-choose (on = true) or choose again something a broad keyword reaches.
+  async function setExcept(item, on) {
+    const cur = state.doc.broadExcept || { ids: [], words: [] };
+    const next = { ids: [...(cur.ids || [])], words: [...(cur.words || [])] };
+    if (on) next[item.kind].push(item.value);
+    else next[item.kind] = next[item.kind].filter((v) => v !== item.value);
+    try {
+      const out = await api('/filters/broad-except', { method: 'PUT', body: JSON.stringify(next) });
+      state.doc.broadExcept = out.broadExcept;
+      // Shown straight away; the sync applies it within a minute.
+      for (const x of Object.values(state.doc.expansions || {})) {
+        if (item.kind === 'ids') x.ids = on ? x.ids.filter((k) => k !== item.value) : [...new Set([...x.ids, item.value])];
+        else x.words = on ? x.words.filter((w) => w !== item.value) : x.words;
+      }
+      renderDraft();
+      status($('save-status'), (on ? '"' + item.label + '" is no longer hidden by broad keywords' : '"' + item.label + '" is hidden again') + ', for everyone. Applied within a minute.', 'ok');
+    } catch (err) {
+      status($('save-status'), err.message, 'error');
+    }
   }
 
   $('start-from').addEventListener('change', () => {

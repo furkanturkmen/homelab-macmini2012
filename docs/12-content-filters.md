@@ -42,7 +42,9 @@ Decisions come from the keywords Seerr's own detail endpoint returns (cached for
 *broad*: its word then also hides every TMDB keyword and every library tag that
 contains it, for everyone who has it ("harem" also hides "reverse harem" and
 AniList's "Female Harem"). The sync works the reach out every run, saves it in
-the store for seerr-guard, and the page shows it under the keywords. Meant for
+the store for seerr-guard, and the page shows it under the keywords. Open a
+broad keyword there to see what it reaches: bold is hidden, plain is not, and a
+click switches one ("food porn" need not go with "porn"). Shared by everyone. Meant for
 words like these; "school" would reach far too much.
 
 **Sexual content, a backup.** A person can also be given *Hide sexual

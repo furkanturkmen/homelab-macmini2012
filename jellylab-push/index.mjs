@@ -1384,6 +1384,25 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  /* What broad keywords must not reach after all, for everyone. */
+  if (url.pathname === '/filters/broad-except' && req.method === 'PUT') {
+    const secret = req.headers['x-filter-store-secret'];
+    try {
+      if (!(FILTER_STORE_SECRET && secret === FILTER_STORE_SECRET)) {
+        if (!fromHomeNetwork(req)) throw Object.assign(new Error('home network only'), { status: 403 });
+        await filters.requireAdmin(req.headers['x-emby-token']);
+      }
+      const doc = await filters.setBroadExcept(JSON.parse((await readText(req)) || '{}'));
+      log(`filter store: broad keywords skip ${doc.broadExcept.ids.length} keyword(s), ${doc.broadExcept.words.length} tag(s)`);
+      if (JELLYFIN_API_KEY) {
+        runFilterSync(JELLYFIN_API_KEY, 'changed', false).catch(e => log(`filter sync failed: ${e.message}`));
+      }
+      return send(res, 200, { broadExcept: doc.broadExcept });
+    } catch (err) {
+      return send(res, err.status ?? (err instanceof SyntaxError ? 400 : 500), { error: err.message });
+    }
+  }
+
   const personMatch = /^\/filters\/content\/([^/]+)$/.exec(url.pathname);
   if (personMatch && req.method === 'PUT') {
     const secret = req.headers['x-filter-store-secret'];

@@ -341,6 +341,11 @@ export function validateContent(doc) {
   // Keywords whose word also blocks every tag and keyword containing it, and
   // what the sync found each one to contain.
   if ('broadTags' in doc && !isIdList(doc.broadTags)) return 'broadTags must be positive integers';
+  // What broad keywords must not reach after all ("food porn" under "porn").
+  if ('broadExcept' in doc) {
+    const x = doc.broadExcept;
+    if (!x || !isIdList(x.ids ?? []) || !Array.isArray(x.words ?? []) || (x.words ?? []).some(w => typeof w !== 'string')) return 'broadExcept is malformed';
+  }
   if ('expansions' in doc) {
     if (!doc.expansions || typeof doc.expansions !== 'object' || Array.isArray(doc.expansions)) return 'expansions must be an object';
     for (const [id, x] of Object.entries(doc.expansions)) {
@@ -452,6 +457,16 @@ function writeContent(change) {
 /** Which keywords are broad: their word also blocks tags and keywords containing it. */
 export function setBroadTags(ids) {
   return writeContent(doc => ({ ...doc, broadTags: parseIds(ids) }));
+}
+
+/**
+ * What broad keywords must not reach after all: TMDB keyword ids and library
+ * tags, for everyone ("food porn" stays visible although "porn" is broad).
+ * A person who has such a keyword directly still has it hidden.
+ */
+export function setBroadExcept({ ids, words }) {
+  const clean = [...new Set((Array.isArray(words) ? words : []).map(w => String(w).trim()).filter(Boolean))].sort();
+  return writeContent(doc => ({ ...doc, broadExcept: { ids: parseIds(ids), words: clean } }));
 }
 
 /**
@@ -911,7 +926,15 @@ export async function syncContentFilters(token) {
   const expansions = {};
   for (const id of broadInUse) {
     if (!(id in broadNames)) throw Object.assign(new Error(`keyword name unavailable for ${id}`), { status: 503 });
-    expansions[id] = await expandWord(broadNames[id], libraryTags);
+    // Un-chosen reach is left out; its names stay, so the page can offer it back.
+    const reach = await expandWord(broadNames[id], libraryTags);
+    const exceptIds = new Set(doc.broadExcept?.ids ?? []);
+    const exceptWords = new Set((doc.broadExcept?.words ?? []).map(lower));
+    expansions[id] = {
+      ...reach,
+      ids: reach.ids.filter(k => k === id || !exceptIds.has(k)),
+      words: reach.words.filter(w => !exceptWords.has(lower(w))),
+    };
   }
   if (JSON.stringify(expansions) !== JSON.stringify(doc.expansions ?? {})) {
     doc = await writeContent(d => ({ ...d, expansions }));
