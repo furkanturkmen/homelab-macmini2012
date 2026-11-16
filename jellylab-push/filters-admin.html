@@ -255,15 +255,28 @@
   function renderDraft() {
     const chips = $('chips');
     chips.replaceChildren();
-    const ids = keywordsOf(state.draft.blockedTags).sort(byName);
-    $('kw-count').textContent = ids.length ? '(' + ids.length + ')' : '';
+    const all = keywordsOf(state.draft.blockedTags);
+    const broad = new Set(state.doc.broadTags || []);
+    // A keyword a broad keyword in this list already reaches ("torture porn"
+    // under broad "porn") gets no chip of its own: it is listed under the word
+    // that covers it. It stays saved, so it is back if that word stops being broad.
+    const coveredBy = new Map();
+    for (const id of all) {
+      if (!broad.has(id)) continue;
+      for (const k of (state.doc.expansions || {})[id]?.ids || []) {
+        if (k !== id && all.includes(k) && !coveredBy.has(k)) coveredBy.set(k, id);
+      }
+    }
+    const ids = all.filter((id) => !coveredBy.has(id)).sort(byName);
+    $('kw-count').textContent = all.length
+      ? '(' + ids.length + (coveredBy.size ? ', plus ' + coveredBy.size + ' covered by broad keywords' : '') + ')'
+      : '';
     if (!ids.length) {
       const none = document.createElement('span');
       none.className = 'muted';
       none.textContent = 'No keywords hidden.';
       chips.append(none);
     }
-    const broad = new Set(state.doc.broadTags || []);
     const expands = $('expands');
     expands.replaceChildren();
     for (const id of ids) {
@@ -288,10 +301,10 @@
       if (!broad.has(id)) continue;
       const x0 = (state.doc.expansions || {})[id];
       const more = x0 ? [...new Set([...x0.ids.filter((k) => k !== id).map(nameOf), ...x0.words])].sort((a, c) => a.localeCompare(c)) : null;
+      if (more && !more.length) continue; // reaches nothing beyond itself: nothing to show
       const d = document.createElement('details');
       const s = document.createElement('summary');
       if (!more) s.textContent = nameOf(id) + ' → worked out at the next sync';
-      else if (!more.length) s.textContent = nameOf(id) + ' → nothing more';
       else s.textContent = nameOf(id) + ' → ' + more.length + ' more';
       d.append(s);
       if (more && more.length) {
