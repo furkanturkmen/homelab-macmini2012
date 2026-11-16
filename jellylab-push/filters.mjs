@@ -768,7 +768,9 @@ async function sexualVerdictsNow(anilistIds) {
  */
 async function expandWord(word, libraryTags) {
   const ids = [];
-  for (let page = 1; page <= 10; page++) {
+  // Seerr passes TMDB's paging on as `total_pages`. Up to 50 pages (1000
+  // keywords), far more than any word on the lists reaches.
+  for (let page = 1; page <= 50; page++) {
     const body = await seerr(`/search/keyword?query=${encodeURIComponent(word)}&page=${page}`);
     for (const k of body.results ?? []) {
       if (Number.isInteger(k?.id) && typeof k.name === 'string' && containsWord(k.name, word)) {
@@ -776,7 +778,7 @@ async function expandWord(word, libraryTags) {
         keywordNameCache.set(k.id, k.name);
       }
     }
-    if (page >= (body.totalPages ?? 1)) break;
+    if (!(body.results ?? []).length || page >= (body.total_pages ?? body.totalPages ?? 1)) break;
   }
   const words = libraryTags.filter(t => containsWord(t, word) && t.toLowerCase() !== word.toLowerCase());
   return { ids: parseIds(ids), words: [...new Set(words)].sort() };

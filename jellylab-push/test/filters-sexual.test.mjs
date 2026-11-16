@@ -108,7 +108,7 @@ before(async () => {
     if (url.pathname === '/api/v1/search/keyword') {
       const q = url.searchParams.get('query');
       const all = [{ id: 9194, name: 'harem' }, { id: 777, name: 'reverse harem' }, { id: 778, name: 'haremony' }];
-      return json(res, 200, { page: 1, totalPages: 1, results: all.filter((k) => k.name.includes(q)) });
+      return json(res, 200, { page: 1, total_pages: 1, total_results: 3, results: all.filter((k) => k.name.includes(q)) });
     }
     return json(res, 404, {});
   });
