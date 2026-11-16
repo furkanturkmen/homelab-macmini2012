@@ -554,15 +554,45 @@ async function titleKeywords(mediaType, tmdbId) {
 const SEXUAL_CACHE = process.env.SEXUAL_CACHE_PATH || '/data/sexual-content.json';
 const ANILIST_URL = process.env.ANILIST_URL || 'https://graphql.anilist.co';
 const JIKAN_URL = process.env.JIKAN_URL || 'https://api.jikan.moe/v4';
+// MyAnimeList's own API, with a free Client ID (myanimelist.net/apiconfig).
+// Asked first when set; Jikan is the fallback.
+const MAL_URL = process.env.MAL_URL || 'https://api.myanimelist.net/v2';
+const MAL_CLIENT_ID = process.env.MAL_CLIENT_ID || '';
+
+/** A MyAnimeList rating, from the official API if it can, else from Jikan. */
+async function malRating(idMal, down) {
+  if (MAL_CLIENT_ID && !down.official) {
+    try {
+      const res = await fetch(`${MAL_URL}/anime/${idMal}?fields=rating`, {
+        headers: { 'X-MAL-CLIENT-ID': MAL_CLIENT_ID },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) throw new Error(`myanimelist answered ${res.status}`);
+      return (await res.json())?.rating ?? null;
+    } catch {
+      down.official = true;
+    }
+  }
+  if (down.jikan) throw new Error('no MyAnimeList source answering');
+  try {
+    const res = await fetch(`${JIKAN_URL}/anime/${idMal}`, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`jikan answered ${res.status}`);
+    return (await res.json())?.data?.rating ?? null;
+  } catch (e) {
+    down.jikan = true;
+    throw e;
+  }
+}
 
 /** Whether a source's answer means sexual content. */
 export function sexualFrom({ anilist, malRating }) {
   const why = [];
   if (anilist?.isAdult) why.push('AniList: adult');
   for (const g of ['Hentai', 'Ecchi']) if ((anilist?.genres ?? []).includes(g)) why.push(`AniList: ${g}`);
+  // "Rx - Hentai" from Jikan, "rx" from the official API; likewise R+.
   const rating = String(malRating ?? '');
-  if (/^Rx\b/.test(rating)) why.push('MyAnimeList: Rx (hentai)');
-  if (/^R\+/.test(rating)) why.push('MyAnimeList: R+ (mild nudity)');
+  if (/^rx\b/i.test(rating)) why.push('MyAnimeList: Rx (hentai)');
+  if (/^r\+/i.test(rating)) why.push('MyAnimeList: R+ (mild nudity)');
   return why;
 }
 
@@ -613,17 +643,16 @@ async function sexualVerdicts(anilistIds) {
       break; // keep what is known; the rest is asked next run
     }
   }
-  let malDown = false;
+  // A source that fails once is left out for the rest of this run.
+  const down = { official: false, jikan: false };
   for (const id of ids) {
     const idMal = cache.anilist[id]?.idMal;
-    if (!idMal || fresh(cache.mal[idMal]) || malDown) continue;
+    if (!idMal || fresh(cache.mal[idMal])) continue;
     try {
-      const res = await fetch(`${JIKAN_URL}/anime/${idMal}`, { signal: AbortSignal.timeout(10000) });
-      if (!res.ok) throw new Error(`jikan answered ${res.status}`);
-      cache.mal[idMal] = { rating: (await res.json())?.data?.rating ?? null, at: Date.now() };
-      await new Promise(r => setTimeout(r, 400)); // Jikan allows about three a second
+      cache.mal[idMal] = { rating: await malRating(idMal, down), at: Date.now() };
+      await new Promise(r => setTimeout(r, 400)); // both allow about three a second
     } catch {
-      malDown = true;
+      if (down.jikan && (down.official || !MAL_CLIENT_ID)) break;
     }
   }
   await saveSexualCache(cache).catch(() => {});

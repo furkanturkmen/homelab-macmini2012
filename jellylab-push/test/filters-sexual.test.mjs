@@ -149,6 +149,11 @@ test('sexualFrom reads AniList and MyAnimeList the agreed way', () => {
   assert.deepEqual(filters.sexualFrom({ malRating: 'Rx - Hentai' }), ['MyAnimeList: Rx (hentai)']);
   assert.deepEqual(filters.sexualFrom({ malRating: 'R+ - Mild Nudity' }), ['MyAnimeList: R+ (mild nudity)']);
   assert.deepEqual(filters.sexualFrom({ malRating: 'R - 17+ (violence & profanity)' }), [], 'R alone is violence, not sex');
+  // The official API writes them in lower case.
+  assert.deepEqual(filters.sexualFrom({ malRating: 'r+' }), ['MyAnimeList: R+ (mild nudity)']);
+  assert.deepEqual(filters.sexualFrom({ malRating: 'rx' }), ['MyAnimeList: Rx (hentai)']);
+  assert.deepEqual(filters.sexualFrom({ malRating: 'r' }), []);
+  assert.deepEqual(filters.sexualFrom({ malRating: 'pg_13' }), []);
   assert.deepEqual(filters.sexualFrom({ anilist: { genres: ['Action'] }, malRating: 'PG-13' }), []);
 });
 

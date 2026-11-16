@@ -720,6 +720,9 @@ services:
       # rather than only when an administrator is signed in and remembers to.
       # The person whose setting changed is usually not an administrator.
       JELLYFIN_API_KEY: "${JELLYFIN_API_KEY}"
+      # MyAnimeList's own API, for the "sexual content" check's Rx / R+ ratings.
+      # Optional: without it the free Jikan mirror is used, which is sometimes down.
+      MAL_CLIENT_ID: "${MAL_CLIENT_ID:-}"
       # Shared with seerr-guard, which sends filter changes made through Seerr's
       # settings API here. jellylab-push is the only writer of the filter store.
       FILTER_STORE_SECRET: "${FILTER_STORE_SECRET}"
