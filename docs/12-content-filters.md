@@ -46,8 +46,11 @@ the store for seerr-guard, and the page shows it under the keywords. Meant for
 words like these; "school" would reach far too much.
 
 **Sexual content, a backup.** A person can also be given *Hide sexual
-content*: titles AniList marks adult or files under Hentai or Ecchi,
-MyAnimeList rates Rx or R+, or TMDB marks adult, whatever their keywords. It
+content*: titles AniList marks adult, files under Hentai or Ecchi, or tags
+with rape, incest or prostitution (any strength) or nudity (from 50% of
+voters); that MyAnimeList rates Rx or R+; or that TMDB marks adult, whatever
+their keywords. The AniList tags and strengths are `SEXUAL_TAGS` in
+`jellylab-push/filters.mjs`. It
 catches titles nobody gave the right keywords. AniList and MyAnimeList answers
 are kept for 30 days (`jellylab-push-data/sexual-content.json`); MyAnimeList's
 free mirror (Jikan) is sometimes down, and then simply adds nothing until it

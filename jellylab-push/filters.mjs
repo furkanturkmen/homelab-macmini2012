@@ -584,11 +584,28 @@ async function malRating(idMal, down) {
   }
 }
 
+/*
+ * AniList tags that count, from what strength (the share of AniList voters who
+ * agree the tag applies). Decided by the household on 2026-11-16: rape, incest
+ * and prostitution at any strength, nudity from 50% - below that it is on half
+ * the mainstream action anime there are.
+ */
+export const SEXUAL_TAGS = [
+  { name: 'Rape', from: 0 },
+  { name: 'Incest', from: 0 },
+  { name: 'Prostitution', from: 0 },
+  { name: 'Nudity', from: 50 },
+];
+
 /** Whether a source's answer means sexual content. */
 export function sexualFrom({ anilist, malRating }) {
   const why = [];
   if (anilist?.isAdult) why.push('AniList: adult');
   for (const g of ['Hentai', 'Ecchi']) if ((anilist?.genres ?? []).includes(g)) why.push(`AniList: ${g}`);
+  for (const rule of SEXUAL_TAGS) {
+    const tag = (anilist?.tags ?? []).find(t => t.name === rule.name);
+    if (tag && (tag.rank ?? 0) >= rule.from) why.push(`AniList: ${tag.name} ${tag.rank}%`);
+  }
   // "Rx - Hentai" from Jikan, "rx" from the official API; likewise R+.
   const rating = String(malRating ?? '');
   if (/^rx\b/i.test(rating)) why.push('MyAnimeList: Rx (hentai)');
@@ -614,6 +631,8 @@ async function saveSexualCache(cache) {
 }
 
 const fresh = (entry) => entry && Date.now() - entry.at < 30 * DAY;
+// An AniList entry saved before tags were kept is asked again.
+const freshAniList = (entry) => fresh(entry) && Array.isArray(entry.tags);
 
 /**
  * AniList ids -> reasons a title is sexual content ([] when it is not, absent
@@ -622,7 +641,7 @@ const fresh = (entry) => entry && Date.now() - entry.at < 30 * DAY;
 async function sexualVerdicts(anilistIds) {
   const cache = await loadSexualCache();
   const ids = [...new Set(anilistIds)];
-  const missing = ids.filter(id => !fresh(cache.anilist[id]));
+  const missing = ids.filter(id => !freshAniList(cache.anilist[id]));
   for (let i = 0; i < missing.length; i += 50) {
     const batch = missing.slice(i, i + 50);
     try {
@@ -630,14 +649,15 @@ async function sexualVerdicts(anilistIds) {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({
-          query: 'query($ids:[Int]){Page(perPage:50){media(id_in:$ids){id isAdult genres idMal}}}',
+          query: 'query($ids:[Int]){Page(perPage:50){media(id_in:$ids){id isAdult genres idMal tags{name rank}}}}',
           variables: { ids: batch },
         }),
         signal: AbortSignal.timeout(20000),
       });
       if (!res.ok) throw new Error(`anilist answered ${res.status}`);
       for (const m of (await res.json())?.data?.Page?.media ?? []) {
-        cache.anilist[m.id] = { isAdult: m.isAdult === true, genres: m.genres ?? [], idMal: m.idMal ?? null, at: Date.now() };
+        const tags = (m.tags ?? []).filter(t => SEXUAL_TAGS.some(r => r.name === t.name)).map(t => ({ name: t.name, rank: t.rank }));
+        cache.anilist[m.id] = { isAdult: m.isAdult === true, genres: m.genres ?? [], idMal: m.idMal ?? null, tags, at: Date.now() };
       }
     } catch {
       break; // keep what is known; the rest is asked next run
