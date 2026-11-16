@@ -1044,9 +1044,15 @@ export async function syncContentFilters(token) {
      */
     const before = (u.Policy.BlockedTags ?? []);
     // Compared without capitals, as Jellyfin compares them when hiding.
-    const managed = new Set((stamps.users[u.Id] ?? []).map(lower));
+    // A managed entry Jellyfin split at a comma (before names were made safe)
+    // came back as its pieces; those pieces are ours too. Empty entries are
+    // never anybody's choice.
+    const managed = new Set((stamps.users[u.Id] ?? [])
+      .flatMap(t => [t, ...String(t).split(/[,|]/)])
+      .map(t => lower(t).trim()));
     const wanted = new Set(markers.map(lower));
-    const keep = before.filter(t => !String(t).startsWith(MARKER_PREFIX) && !managed.has(lower(t)) && !wanted.has(lower(t)));
+    const keep = before.filter(t => String(t).trim() && !String(t).startsWith(MARKER_PREFIX)
+      && !managed.has(lower(t).trim()) && !wanted.has(lower(t)));
     const next = [...keep, ...markers];
     if (markers.length) stamps.users[u.Id] = markers;
     else delete stamps.users[u.Id];
