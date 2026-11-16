@@ -57,7 +57,9 @@ catches titles nobody gave the right keywords. AniList and MyAnimeList answers
 are kept for 30 days (`jellylab-push-data/sexual-content.json`); MyAnimeList's
 free mirror (Jikan) is sometimes down, and then simply adds nothing until it
 answers again. In Seerr, titles not yet in the library are judged by TMDB's
-adult flag; once in the library, Jellyfin's verdict applies.
+adult flag, and anime (TMDB "anime" keyword) also by asking jellylab-push for
+the same AniList/MyAnimeList verdict, found by title and year; once in the
+library, Jellyfin's verdict applies.
 
 **Jellyfin's own limits count in Seerr too.** A person's Jellyfin settings
 (Dashboard › Users › the person › *Parental control* and *Access*) also apply

@@ -673,6 +673,23 @@ export async function linkAniList(title, year) {
 }
 
 /**
+ * The verdict for one anime by name and year, for seerr-guard: an anime that
+ * is not in the library yet has no AniList link, so it is found the same way
+ * as an anime film in the Movies library. The original title is tried too,
+ * since AniList may only know the Japanese one. { anilist, why } - anilist is
+ * null when AniList has no single match, and then there is nothing to judge.
+ */
+export async function sexualVerdictFor({ title, originalTitle, year }) {
+  let id = null;
+  for (const t of [title, originalTitle]) {
+    if (t && !id) id = await linkAniList(t, year);
+  }
+  if (!id) return { anilist: null, why: [] };
+  const verdicts = await sexualVerdicts([id]);
+  return { anilist: id, why: verdicts.get(id) ?? [] };
+}
+
+/**
  * AniList ids -> reasons a title is sexual content ([] when it is not, absent
  * when nothing could be learned about it).
  */

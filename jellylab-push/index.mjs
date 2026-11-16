@@ -1232,6 +1232,27 @@ const server = createServer(async (req, res) => {
    * here can put words on everyone's phone, so a device on the LAN cannot,
    * and a relay visitor never gets this far (POST is refused above).
    */
+  /*
+   * "Is this anime sexual content?", for seerr-guard, about an anime that is
+   * not in the library yet. Same rules and cache as the sync, so Seerr and
+   * Jellyfin judge a title alike. Docker network only.
+   */
+  if (url.pathname === '/filters/sexual' && req.method === 'GET') {
+    if (!inside(internalNets, req.socket.remoteAddress)) {
+      return send(res, 403, { error: 'only from the docker network' });
+    }
+    try {
+      const year = Number(url.searchParams.get('year')) || null;
+      return send(res, 200, await filters.sexualVerdictFor({
+        title: url.searchParams.get('title') || '',
+        originalTitle: url.searchParams.get('original') || '',
+        year,
+      }));
+    } catch (err) {
+      return send(res, 502, { error: err.message });
+    }
+  }
+
   if (url.pathname === '/notify/arr' && req.method === 'POST') {
     if (!inside(internalNets, req.socket.remoteAddress)) {
       return send(res, 403, { error: 'only from the docker network' });

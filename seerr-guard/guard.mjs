@@ -34,7 +34,7 @@ import {
   collectKeys, filterBody, singleTitleKey, detailKeywords, makeHider,
   filterCollectionProps, rewriteNextData, buildIdOf, mergeSettings, splitSettings,
   allowedChanges, parseCidrs, isInternalPeer, rowKey, isPrivileged, viaRelay,
-  certificationOf, ratingTable, isRestricted, ruleHides,
+  certificationOf, ratingTable, isRestricted, ruleHides, ANIME_KEYWORD, SEXUAL_CONTENT,
 } from './filter.mjs';
 
 const {
@@ -319,7 +319,7 @@ async function loadCache() {
     const doc = JSON.parse(await readFile(CACHE_PATH, 'utf8'));
     for (const [key, v] of Object.entries(doc.entries ?? {})) {
       if (Array.isArray(v.k) && Number.isFinite(v.at)) {
-        verdicts.set(key, { keywords: v.k, cert: 'q' in v ? v.q : undefined, at: v.at, ttl: v.ttl ?? TTL_KNOWN });
+        verdicts.set(key, { keywords: v.k, cert: 'w' in v ? v.w : undefined, at: v.at, ttl: v.ttl ?? TTL_KNOWN });
       }
     }
     log(`keyword cache: ${verdicts.size} titles`);
@@ -333,10 +333,10 @@ async function saveCache() {
   cacheDirty = false;
   const entries = {};
   for (const [key, v] of verdicts) {
-    // `q`, the rating, saved by a version that also reads TMDB's adult flag
-    // into the keywords. Entries without it (`c`, `r`: older readings) are
+    // `w`, the rating, saved by a version that also asks jellylab-push about anime and reads TMDB's adult flag
+    // into the keywords. Entries without it (`c`, `r`, `q`: older readings) are
     // ignored and looked up again.
-    entries[key] = v.cert === undefined ? { k: v.keywords, at: v.at, ttl: v.ttl } : { k: v.keywords, q: v.cert, at: v.at, ttl: v.ttl };
+    entries[key] = v.cert === undefined ? { k: v.keywords, at: v.at, ttl: v.ttl } : { k: v.keywords, w: v.cert, at: v.at, ttl: v.ttl };
   }
   try {
     await mkdir(dirname(CACHE_PATH), { recursive: true });
@@ -367,6 +367,38 @@ async function limited(fn) {
   }
 }
 
+/*
+ * An anime not in the library has only its TMDB keywords here, and TMDB often
+ * gives no sexual keyword to an anime that AniList tags with rape or heavy
+ * nudity. So for a title TMDB calls anime, jellylab-push is asked for its
+ * "sexual content" verdict (AniList, MyAnimeList; same rules and cache as the
+ * Jellyfin side), and a yes is added like a keyword.
+ *
+ * If jellylab-push cannot answer, the keywords still decide and the title is
+ * asked about again within the hour, rather than hiding every anime meanwhile.
+ */
+const TTL_RETRY = 60 * 60 * 1000;
+
+async function withAnimeVerdict(keywords, body) {
+  if (!keywords.includes(ANIME_KEYWORD) || keywords.includes(SEXUAL_CONTENT)) return { keywords, ttl: TTL_KNOWN };
+  const year = String(body.firstAirDate ?? body.releaseDate ?? '').slice(0, 4);
+  const q = new URLSearchParams({
+    title: body.name ?? body.title ?? '',
+    original: body.originalName ?? body.originalTitle ?? '',
+    year,
+  });
+  try {
+    const res = await fetch(`${PUSH_URL}/filters/sexual?${q}`, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) throw new Error(`jellylab-push answered ${res.status}`);
+    const verdict = await res.json();
+    if ((verdict.why ?? []).length) return { keywords: [...keywords, SEXUAL_CONTENT], ttl: TTL_KNOWN };
+    return { keywords, ttl: TTL_KNOWN };
+  } catch (err) {
+    log(`sexual-content check unavailable for ${body.name ?? body.title}: ${err.message}`);
+    return { keywords, ttl: TTL_RETRY };
+  }
+}
+
 function lookup(key) {
   if (inflight.has(key)) return inflight.get(key);
   const [type, id] = key.split(':');
@@ -382,9 +414,10 @@ function lookup(key) {
     }
     if (!res.ok) throw new Error(`seerr /${type}/${id} -> ${res.status}`);
     const body = await res.json();
-    const keywords = detailKeywords(body);
-    if (keywords === null) throw new Error(`seerr /${type}/${id} has no keywords field`);
-    remember(key, keywords, certificationOf(body, ratingCountry));
+    const found = detailKeywords(body);
+    if (found === null) throw new Error(`seerr /${type}/${id} has no keywords field`);
+    const { keywords, ttl } = await withAnimeVerdict(found, body);
+    remember(key, keywords, certificationOf(body, ratingCountry), ttl);
     return keywords;
   }).finally(() => inflight.delete(key));
   inflight.set(key, promise);
@@ -695,7 +728,10 @@ async function titleResponse(req, res, ctx, route) {
   // The detail response names its own keywords, so it is decided from itself
   // and cached for everyone - no second lookup.
   const keywords = detailKeywords(body);
-  if (keywords) remember(route.key, keywords, certificationOf(body, ratingCountry));
+  if (keywords) {
+    const checked = await withAnimeVerdict(keywords, body);
+    remember(route.key, checked.keywords, certificationOf(body, ratingCountry), checked.ttl);
+  }
   if (ctx.hide(route.key)) {
     decided(ctx, '404', route.key, req);
     if (!SHADOW) return hiddenJson(res);

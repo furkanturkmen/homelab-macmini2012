@@ -35,7 +35,11 @@ const USERS = {
 const SESSIONS = { adminsid: 1, kidsid: 3, teensid: 4, brokensid: 5 };
 const KEYWORDS = { 100: [5], 200: [7], 300: [], 301: [], 400: [], 401: [], 402: [], 600: [], 601: [] };
 const ANIME = 210024;
-const TV_KEYWORDS = { 500: [ANIME], 501: [], 502: [] };
+const TV_KEYWORDS = { 500: [ANIME], 501: [], 502: [], 700: [ANIME], 701: [ANIME] };
+// What jellylab-push says about anime not in the library: 700 is sexual
+// content (say, AniList tags it with rape), 701 is not.
+const SEXUAL_VERDICTS = { 'Show 700': ['AniList: Rape 84%'] };
+const SEXUAL = 999999999;
 // US ratings; a missing entry is a title without one.
 const CERTS = { 400: 'R', 401: 'PG', 600: 'R', 601: 'PG', 500: 'TV-PG', 501: 'TV-14', 502: 'TV-PG' };
 
@@ -65,7 +69,7 @@ const baseStore = () => ({
   version: 2,
   adultTags: [900, 901],
   users: {
-    kid: { name: 'robin', blockedTags: [5], hideAdult: false },
+    kid: { name: 'robin', blockedTags: [5, SEXUAL], hideAdult: false },
     self: { name: 'furkan', blockedTags: [], hideAdult: false },
   },
   canary: { seerrUserId: 9, blockedTags: [5], hiddenTitle: 'movie:100', cleanTitle: 'movie:200', keywordId: 5 },
@@ -195,7 +199,12 @@ function fakeSeerr() {
 
 function fakePush() {
   return http.createServer(async (req, res) => {
-    const m = /^\/filters\/content\/([^/]+)$/.exec(new URL(req.url, 'http://x').pathname);
+    const url = new URL(req.url, 'http://x');
+    if (url.pathname === '/filters/sexual' && req.method === 'GET') {
+      const why = SEXUAL_VERDICTS[url.searchParams.get('title')] ?? [];
+      return json(res, 200, { anilist: why.length ? 1 : null, why });
+    }
+    const m = /^\/filters\/content\/([^/]+)$/.exec(url.pathname);
     if (!m || req.method !== 'PUT') return json(res, 404, {});
     if (req.headers['x-filter-store-secret'] !== SECRET) return json(res, 403, { error: 'bad secret' });
     const changes = JSON.parse(await readAll(req));
@@ -377,7 +386,7 @@ test('collection pages and their data lose hidden parts', async () => {
 
 test('settings shim answers the fork fields and applies the fork permission rules', async () => {
   const mine = await (await get('/api/v1/user/3/settings/main', as('kid'))).json();
-  assert.deepEqual(mine, { locale: 'en', blockedTags: '5', hideAdult: false, adultTags: '900,901' });
+  assert.deepEqual(mine, { locale: 'en', blockedTags: '5,999999999', hideAdult: false, adultTags: '900,901' });
 
   const kidPost = await fetch(`${base}/api/v1/user/3/settings/main`, {
     method: 'POST',
@@ -389,7 +398,7 @@ test('settings shim answers the fork fields and applies the fork permission rule
   assert.deepEqual(seen.pushPuts.at(-1), { jellyfinUserId: 'kid', changes: { hideAdult: true, name: 'robin' } }, 'a kid cannot clear their own blocked tags');
   const echoed = await kidPost.json();
   assert.equal(echoed.hideAdult, true);
-  assert.equal(echoed.blockedTags, '5');
+  assert.equal(echoed.blockedTags, '5,999999999');
 
   const adminPost = await fetch(`${base}/api/v1/user/3/settings/main`, {
     method: 'POST',
@@ -548,4 +557,10 @@ test('when Jellyfin cannot say what someone may see, they get nothing rather tha
   const res = await get('/api/v1/search?query=teen', as('broken'));
   assert.equal(res.status, 503);
   assert.equal(res.headers.get('x-seerr-guard'), 'unavailable');
+});
+
+test('an anime jellylab-push calls sexual content is hidden before it is in the library', async () => {
+  assert.equal((await get('/api/v1/tv/700', as('kid'))).status, 404, 'AniList-tagged: hidden for someone who hides sexual content');
+  assert.equal((await get('/api/v1/tv/701', as('kid'))).status, 200, 'a clean anime stays');
+  assert.equal((await get('/api/v1/tv/700', as('admin'))).status, 200, 'nobody else is affected');
 });
