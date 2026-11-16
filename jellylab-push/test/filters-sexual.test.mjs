@@ -217,7 +217,7 @@ test('broad words and sexual content, with MyAnimeList down', async () => {
     'the broad word reaches the TMDB keyword and the library tag; "haremony" is another word');
 
   const store = JSON.parse(await readFile(process.env.CONTENT_FILTERS_PATH, 'utf8'));
-  assert.deepEqual(store.expansions, { 9194: { ids: [777, 9194], words: ['Female Harem'] } }, 'saved for seerr-guard');
+  assert.deepEqual(store.expansions, { 9194: { ids: [777, 9194], words: ['Female Harem'], names: { 777: 'reverse harem', 9194: 'harem' } } }, 'saved for seerr-guard, with names for the filter page');
   assert.deepEqual(filters.hiddenIdsFor(store, 'kid-0000-00000001'), [777, 9194, SEXUAL]);
   assert.deepEqual(out.sexual.map((s) => s.item).sort(), ['Anime Film', 'Harem series']);
 });

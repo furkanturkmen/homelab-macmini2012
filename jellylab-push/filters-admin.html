@@ -38,6 +38,20 @@
   .status.error { color:var(--danger); }
   .status.ok { color:var(--ok); }
   [hidden] { display:none !important; }
+  h2 { font-size:18px; margin:0 0 12px; }
+  h3 { font-size:15px; margin:18px 0 4px; }
+  .count { color:var(--muted); font-weight:400; font-size:13px; }
+  .hint { display:block; color:var(--muted); font-size:13px; font-weight:400; margin:2px 0 6px; }
+  .switch label { margin:0; font-weight:500; }
+  .switch.big { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:12px; margin-top:0; }
+  .actions { margin-top:16px; }
+  details.more { margin-top:14px; }
+  details.more summary { cursor:pointer; color:var(--muted); font-size:14px; }
+  #expands details { font-size:13px; color:var(--muted); margin:4px 0; }
+  #expands summary { cursor:pointer; }
+  #expands .list { margin:4px 0 6px 14px; line-height:1.6; }
+  select { font:inherit; padding:7px 9px; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--ink); }
+  .people-group { font-size:12px; color:var(--muted); width:100%; margin-top:6px; }
 </style>
 </head>
 <body>
@@ -60,31 +74,48 @@
     <div class="card">
       <div class="row" style="justify-content:space-between">
         <strong>Who</strong>
-        <span class="muted" id="signed-in"></span>
+        <span class="row" style="gap:10px"><span class="muted" id="signed-in"></span><button class="ghost" id="sign-out">Sign out</button></span>
       </div>
       <div class="people" id="people" style="margin-top:10px"></div>
     </div>
 
     <div class="card" id="editor" hidden>
-      <strong id="editing"></strong>
-      <label>Hidden keywords <span class="muted" style="font-weight:400">(set by an administrator; the person cannot remove these)</span></label>
-      <div class="chips" id="chips"></div>
-      <p class="muted" style="margin:4px 0 0;font-size:13px">A <b>broad</b> keyword also hides every keyword and tag containing its word, for everyone who has it: "harem" also hides "Female Harem" and "reverse harem". Click a keyword's "broad" to switch it.</p>
-      <div id="expands" class="muted" style="font-size:13px;margin-top:6px"></div>
-      <div class="switch">
+      <h2 id="editing"></h2>
+
+      <div class="row" style="margin-bottom:12px">
+        <label for="start-from" style="margin:0;font-weight:500">Start from</label>
+        <select id="start-from"></select>
+        <span class="hint" style="margin:0">copies another person's filter here; nothing is saved until you press Save</span>
+      </div>
+
+      <div class="switch big">
         <input type="checkbox" id="sexual">
-        <label for="sexual" style="margin:0;font-weight:500">Hide sexual content <span class="muted">(titles AniList marks adult, files under Hentai or Ecchi, or tags with rape, incest, prostitution or 50%+ nudity; that MyAnimeList rates Rx or R+; or that TMDB marks adult). A backup for titles nobody gave the right keywords.</span></label>
+        <label for="sexual"><b>Hide sexual content</b>
+          <span class="hint">Titles AniList or MyAnimeList mark as sexual (adult, hentai, ecchi; rape, incest, prostitution, or strong nudity) or TMDB marks adult. Catches what the keywords below miss.</span></label>
       </div>
+
+      <h3>Hidden keywords <span class="count" id="kw-count"></span></h3>
+      <p class="hint">Click <b>broad</b> on a keyword to also hide everything containing its word ("harem" also hides "Female Harem"). Broad is shared: it applies to everyone who has that keyword.</p>
+      <div class="chips" id="chips"></div>
+      <div id="expands"></div>
+
       <label for="search">Add a keyword</label>
-      <input id="search" type="search" placeholder="e.g. gore, sexual content…" autocomplete="off">
+      <input id="search" type="search" placeholder="Type at least 2 letters, e.g. gore" autocomplete="off">
       <ul class="results" id="results"></ul>
-      <div class="switch">
-        <input type="checkbox" id="adult">
-        <label for="adult" style="margin:0;font-weight:500">Also hide adult content <span class="muted">(the fixed adult keyword list). This is the person's own switch: they can turn it off again in the JellyLab app. Keywords above can only be changed here.</span></label>
-      </div>
-      <div class="row" style="margin-top:14px">
+
+      <details class="more">
+        <summary>More options</summary>
+        <div class="switch">
+          <input type="checkbox" id="adult">
+          <label for="adult">Also hide the fixed adult keyword list
+            <span class="hint">The person's own switch: they can turn it off again in the JellyLab app.</span></label>
+        </div>
+      </details>
+
+      <div class="row actions">
         <button id="save">Save</button>
         <button class="ghost" id="revert">Undo changes</button>
+        <button class="ghost" id="copy-all" title="Give every person who has a filter exactly this filter">Copy to everyone filtered</button>
       </div>
       <div class="status" id="save-status" role="status"></div>
     </div>
@@ -114,9 +145,18 @@
     sessionStorage.removeItem('filters-token');
     sessionStorage.removeItem('filters-name');
     state.token = null;
+    state.person = null;
+    $('editor').hidden = true;
     $('app').hidden = true;
     $('login').hidden = false;
   }
+
+  // Ends the Jellyfin session too, so the sign-in does not linger as a device.
+  $('sign-out').addEventListener('click', async () => {
+    try { await api('/filters/logout', { method: 'POST' }); } catch { /* signed out here either way */ }
+    signOut();
+    status($('login-status'), 'Signed out.', 'ok');
+  });
 
   $('login-form').addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -138,7 +178,10 @@
     const { doc, people } = await api('/filters/content');
     state.doc = doc;
     state.people = people;
-    const ids = [...Object.values(doc.users).flatMap((u) => u.blockedTags), ...Object.values(doc.expansions || {}).flatMap((x) => x.ids)]
+    // What broad keywords reach comes with its names; only the keywords people
+    // actually have are looked up, once each.
+    for (const x of Object.values(doc.expansions || {})) Object.assign(state.names, x.names || {});
+    const ids = [...new Set(Object.values(doc.users).flatMap((u) => u.blockedTags))]
       .filter((id) => id !== SEXUAL && !(id in state.names));
     if (ids.length) Object.assign(state.names, await api('/filters/keyword-names?ids=' + ids.join(',')));
     $('login').hidden = true;
@@ -152,22 +195,44 @@
     return state.doc.users[id] || { blockedTags: [], hideAdult: false };
   }
 
+  const nameOf = (id) => state.names[id] || 'keyword ' + id;
+  const byName = (a, b) => nameOf(a).localeCompare(nameOf(b));
+  const isFiltered = (id) => Boolean(state.doc.users[id]);
+
+  // Filtered people first, then everyone else; each group A-Z.
   function renderPeople() {
     const box = $('people');
     box.replaceChildren();
-    for (const p of state.people) {
-      const entry = entryFor(p.id);
-      const b = document.createElement('button');
-      b.className = 'person';
-      b.setAttribute('aria-pressed', String(state.person === p.id));
-      b.textContent = p.name;
-      const badge = document.createElement('span');
-      badge.className = 'badge';
-      const n = keywordsOf(entry.blockedTags).length;
-      badge.textContent = [n ? n + ' keyword' + (n === 1 ? '' : 's') : '', entry.blockedTags.includes(SEXUAL) ? 'sexual content hidden' : '', entry.hideAdult ? 'adult hidden' : '', p.isAdmin ? 'admin' : ''].filter(Boolean).join(' · ');
-      b.append(badge);
-      b.addEventListener('click', () => select(p.id));
-      box.append(b);
+    const sorted = [...state.people].sort((a, b) => a.name.localeCompare(b.name));
+    for (const [title, group] of [['Filtered', sorted.filter((p) => isFiltered(p.id))], ['Not filtered', sorted.filter((p) => !isFiltered(p.id))]]) {
+      if (!group.length) continue;
+      const h = document.createElement('div');
+      h.className = 'people-group';
+      h.textContent = title;
+      box.append(h);
+      for (const p of group) {
+        const entry = entryFor(p.id);
+        const b = document.createElement('button');
+        b.className = 'person';
+        b.setAttribute('aria-pressed', String(state.person === p.id));
+        b.textContent = p.name;
+        const badge = document.createElement('span');
+        badge.className = 'badge';
+        const n = keywordsOf(entry.blockedTags).length;
+        badge.textContent = [n ? n + ' keyword' + (n === 1 ? '' : 's') : '', entry.blockedTags.includes(SEXUAL) ? 'sexual' : '', p.isAdmin ? 'admin' : ''].filter(Boolean).join(' · ');
+        b.append(badge);
+        b.addEventListener('click', () => select(p.id));
+        box.append(b);
+      }
+    }
+  }
+
+  function renderStartFrom() {
+    const sel = $('start-from');
+    sel.replaceChildren(new Option('— choose a person —', ''));
+    for (const p of [...state.people].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (p.id === state.person || !isFiltered(p.id)) continue;
+      sel.append(new Option(p.name, p.id));
     }
   }
 
@@ -183,24 +248,28 @@
     $('results').replaceChildren();
     status($('save-status'), '');
     renderPeople();
+    renderStartFrom();
     renderDraft();
   }
 
   function renderDraft() {
     const chips = $('chips');
     chips.replaceChildren();
-    if (!keywordsOf(state.draft.blockedTags).length) {
+    const ids = keywordsOf(state.draft.blockedTags).sort(byName);
+    $('kw-count').textContent = ids.length ? '(' + ids.length + ')' : '';
+    if (!ids.length) {
       const none = document.createElement('span');
       none.className = 'muted';
-      none.textContent = 'Nothing hidden.';
+      none.textContent = 'No keywords hidden.';
       chips.append(none);
     }
     const broad = new Set(state.doc.broadTags || []);
-    const reach = [];
-    for (const id of keywordsOf(state.draft.blockedTags)) {
+    const expands = $('expands');
+    expands.replaceChildren();
+    for (const id of ids) {
       const chip = document.createElement('span');
       chip.className = 'chip';
-      chip.append(document.createTextNode(state.names[id] || '#' + id));
+      chip.append(document.createTextNode(nameOf(id)));
       const b = document.createElement('button');
       b.className = 'broad';
       b.textContent = 'broad';
@@ -208,24 +277,67 @@
       b.setAttribute('aria-pressed', String(broad.has(id)));
       b.addEventListener('click', () => toggleBroad(id));
       chip.append(b);
-      const x0 = (state.doc.expansions || {})[id];
-      if (broad.has(id) && x0) {
-        const more = [...x0.ids.filter((k) => k !== id).map((k) => state.names[k] || '#' + k), ...x0.words];
-        if (more.length) reach.push((state.names[id] || '#' + id) + ' also hides: ' + more.join(', '));
-      } else if (broad.has(id)) {
-        reach.push((state.names[id] || '#' + id) + ': worked out at the next sync');
-      }
       const x = document.createElement('button');
-      x.setAttribute('aria-label', 'Remove');
+      x.setAttribute('aria-label', 'Remove ' + nameOf(id));
       x.textContent = '×';
       x.addEventListener('click', () => { state.draft.blockedTags = state.draft.blockedTags.filter((t) => t !== id); renderDraft(); });
       chip.append(x);
       chips.append(chip);
+
+      // What a broad keyword reaches, folded: "harem → 9 more", open for the list.
+      if (!broad.has(id)) continue;
+      const x0 = (state.doc.expansions || {})[id];
+      const more = x0 ? [...new Set([...x0.ids.filter((k) => k !== id).map(nameOf), ...x0.words])].sort((a, c) => a.localeCompare(c)) : null;
+      const d = document.createElement('details');
+      const s = document.createElement('summary');
+      if (!more) s.textContent = nameOf(id) + ' → worked out at the next sync';
+      else if (!more.length) s.textContent = nameOf(id) + ' → nothing more';
+      else s.textContent = nameOf(id) + ' → ' + more.length + ' more';
+      d.append(s);
+      if (more && more.length) {
+        const list = document.createElement('div');
+        list.className = 'list';
+        list.textContent = more.join(', ');
+        d.append(list);
+      }
+      expands.append(d);
     }
-    $('expands').textContent = reach.join(' · ');
     $('adult').checked = state.draft.hideAdult;
     $('sexual').checked = state.draft.blockedTags.includes(SEXUAL);
   }
+
+  $('start-from').addEventListener('change', () => {
+    const from = state.doc.users[$('start-from').value];
+    if (!from) return;
+    state.draft = { blockedTags: [...from.blockedTags], hideAdult: from.hideAdult };
+    renderDraft();
+    const who = state.people.find((p) => p.id === $('start-from').value);
+    status($('save-status'), 'Copied from ' + (who ? who.name : 'that person') + '. Press Save to keep it.', 'ok');
+    $('start-from').value = '';
+  });
+
+  $('copy-all').addEventListener('click', async () => {
+    const targets = state.people.filter((p) => isFiltered(p.id) || p.id === state.person);
+    if (!window.confirm('Give these ' + targets.length + ' people exactly this filter?\n\n' + targets.map((p) => p.name).join(', '))) return;
+    $('copy-all').disabled = true;
+    status($('save-status'), 'Saving for ' + targets.length + ' people…');
+    try {
+      for (const p of targets) {
+        const entry = await api('/filters/content/' + encodeURIComponent(p.id), {
+          method: 'PUT',
+          body: JSON.stringify({ ...state.draft, name: p.name }),
+        });
+        if (entry.blockedTags.length || entry.hideAdult) state.doc.users[p.id] = entry;
+        else delete state.doc.users[p.id];
+      }
+      renderPeople();
+      status($('save-status'), 'Saved for ' + targets.map((p) => p.name).join(', ') + '. Seerr applies it straight away; Jellyfin within a few minutes.', 'ok');
+    } catch (err) {
+      status($('save-status'), err.message, 'error');
+    } finally {
+      $('copy-all').disabled = false;
+    }
+  });
 
   async function toggleBroad(id) {
     const now = new Set(state.doc.broadTags || []);
@@ -287,6 +399,7 @@
       if (entry.blockedTags.length || entry.hideAdult) state.doc.users[state.person] = entry;
       else delete state.doc.users[state.person];
       renderPeople();
+      renderStartFrom();
       status($('save-status'), 'Saved. Seerr applies it straight away; Jellyfin within a few minutes.', 'ok');
     } catch (err) {
       status($('save-status'), err.message, 'error');

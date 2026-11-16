@@ -776,6 +776,7 @@ async function sexualVerdictsNow(anilistIds) {
  */
 async function expandWord(word, libraryTags) {
   const ids = [];
+  const names = {};
   // Seerr passes TMDB's paging on as `total_pages`. Up to 50 pages (1000
   // keywords), far more than any word on the lists reaches.
   for (let page = 1; page <= 50; page++) {
@@ -784,12 +785,15 @@ async function expandWord(word, libraryTags) {
       if (Number.isInteger(k?.id) && typeof k.name === 'string' && containsWord(k.name, word)) {
         ids.push(k.id);
         keywordNameCache.set(k.id, k.name);
+        names[k.id] = asTag(k.name);
       }
     }
     if (!(body.results ?? []).length || page >= (body.total_pages ?? body.totalPages ?? 1)) break;
   }
   const words = libraryTags.filter(t => containsWord(t, word) && t.toLowerCase() !== word.toLowerCase());
-  return { ids: parseIds(ids), words: [...new Set(words)].sort() };
+  // The names go along, so the filter page can show what a broad word
+  // reaches without asking Seerr for hundreds of names one by one.
+  return { ids: parseIds(ids), words: [...new Set(words)].sort(), names };
 }
 
 /** Run `fn` over `items`, `limit` at a time. */
@@ -1111,6 +1115,17 @@ export async function keywordNames(ids) {
  * the spot, so a correct password for an ordinary account does not leave a
  * device entry behind for nothing.
  */
+/** End a filter-page sign-in in Jellyfin, so it does not stay listed as a device. */
+export async function signOutAdmin(token) {
+  if (!token) return;
+  const auth = 'MediaBrowser Client="jellylab-filters", Device="filter page", DeviceId="jellylab-filters-page", Version="1"';
+  await fetch(`${JELLYFIN_URL}/Sessions/Logout`, {
+    method: 'POST',
+    headers: { Authorization: `${auth}, Token="${token}"` },
+    signal: AbortSignal.timeout(10000),
+  }).catch(() => {});
+}
+
 export async function signInAdmin(username, password) {
   const auth = 'MediaBrowser Client="jellylab-filters", Device="filter page", DeviceId="jellylab-filters-page", Version="1"';
   const res = await fetch(`${JELLYFIN_URL}/Users/AuthenticateByName`, {

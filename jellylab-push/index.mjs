@@ -1069,7 +1069,7 @@ async function cancel({ tmdbId, type, season }) {
 }
 
 /** Routes that belong to the filter page and answer only on the home network. */
-const FILTER_PAGE_ROUTES = new Set(['/filters/admin', '/filters/login', '/filters/content', '/filters/keywords', '/filters/keyword-names']);
+const FILTER_PAGE_ROUTES = new Set(['/filters/admin', '/filters/login', '/filters/logout', '/filters/content', '/filters/keywords', '/filters/keyword-names']);
 
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
@@ -1305,6 +1305,11 @@ const server = createServer(async (req, res) => {
     } catch (err) {
       return send(res, 500, { error: `filter page missing: ${err.message}` });
     }
+  }
+
+  if (url.pathname === '/filters/logout' && req.method === 'POST') {
+    await filters.signOutAdmin(req.headers['x-emby-token']);
+    return send(res, 200, { ok: true });
   }
 
   if (url.pathname === '/filters/login' && req.method === 'POST') {
