@@ -252,8 +252,16 @@ export async function requireAdmin(token) {
  */
 export const tagFor = (keywordId, names) => {
   const name = names?.[keywordId];
-  return name && name !== String(keywordId) ? name : `keyword ${keywordId}`;
+  return name && name !== String(keywordId) ? asTag(name) : `keyword ${keywordId}`;
 };
+
+/*
+ * A keyword name made safe as a Jellyfin tag. Jellyfin splits a blocked-tag
+ * entry at commas and pipes, so a TMDB keyword named like "sex, love" became
+ * the blocked words "sex" and "love" - and hid every title tagged "love".
+ * Separators become spaces; the title and the blocked list get the same text.
+ */
+export const asTag = (name) => String(name).replace(/[,|]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 /**
  * Tags from earlier versions, cleared wherever they are found. `jellylab:kw:`

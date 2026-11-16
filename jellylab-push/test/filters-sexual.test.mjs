@@ -237,3 +237,10 @@ test('many lookups at once, as a Seerr search page makes them, all succeed', asy
   const unknown = await filters.sexualVerdictFor({ title: 'Nothing Like It', year: 1999 });
   assert.deepEqual(unknown, { anilist: null, why: [] }, 'no single AniList match: nothing to judge');
 });
+
+test('a keyword name with a comma never becomes two blocked words', () => {
+  assert.equal(filters.tagFor(1, { 1: 'sex, love' }), 'sex love', 'not "sex" and "love"');
+  assert.equal(filters.tagFor(1, { 1: 'a | b,, c' }), 'a b c');
+  assert.equal(filters.tagFor(1, { 1: 'oral sex' }), 'oral sex');
+  assert.equal(filters.tagFor(1, {}), 'keyword 1');
+});
