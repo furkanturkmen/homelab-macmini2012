@@ -10,6 +10,8 @@
  *   i5  a series with TMDB "reverse harem" - reached by the broad "harem"
  *   i6  an anime film Jellyfin never linked to AniList - found by title and year, tagged Rape
  *   i7  a live-action film                 - not anime, AniList is never asked
+ *   i8  a series Jellyfin refuses to save  - skipped and reported; the rest still goes through
+ * i2 also has trickplay data, which Jellyfin cannot take back in an update.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,6 +39,7 @@ const ITEMS = [
   { Id: 'i5', Name: 'Reverse series', Type: 'Series', ProviderIds: { Tmdb: '5' }, Tags: [] },
   { Id: 'i6', Name: 'Anime Film', Type: 'Movie', ProductionYear: 1998, ProviderIds: { Tmdb: '6' }, Tags: [] },
   { Id: 'i7', Name: 'Live Film', Type: 'Movie', ProductionYear: 2015, ProviderIds: { Tmdb: '7' }, Tags: [] },
+  { Id: 'i8', Name: 'Broken series', Type: 'Series', ProviderIds: { Tmdb: '8' }, Tags: [] },
 ];
 const searched = [];
 const DETAILS = {
@@ -47,6 +50,7 @@ const DETAILS = {
   'tv:5': { keywords: [{ id: 777, name: 'reverse harem' }] },
   'movie:6': { keywords: [{ id: 210024, name: 'anime' }] },
   'movie:7': { keywords: [{ id: 570, name: 'rape' }] },
+  'tv:8': { keywords: [{ id: 777, name: 'reverse harem' }] },
 };
 const KEYWORD_NAMES = { 9194: 'harem', 777: 'reverse harem' };
 
@@ -77,9 +81,16 @@ before(async () => {
       return json(res, 204, {});
     }
     if (p === '/Items') return json(res, 200, { Items: structuredClone(ITEMS) });
-    if ((m = /^\/Users\/[^/]+\/Items\/([^/]+)$/.exec(p))) return json(res, 200, structuredClone(ITEMS.find((i) => i.Id === m[1])));
+    if ((m = /^\/Users\/[^/]+\/Items\/([^/]+)$/.exec(p))) {
+      const full = structuredClone(ITEMS.find((i) => i.Id === m[1]));
+      if (m[1] === 'i2') full.Trickplay = { abc: { 320: { Width: 320 } } };
+      return json(res, 200, full);
+    }
     if ((m = /^\/Items\/([^/]+)$/.exec(p))) {
-      writes.items.push({ id: m[1], item: await readAll(req) });
+      const body = await readAll(req);
+      // Like Jellyfin: trickplay data sent back in an update is a server error.
+      if (body.Trickplay || m[1] === 'i8') return json(res, 500, {});
+      writes.items.push({ id: m[1], item: body });
       return json(res, 204, {});
     }
     return json(res, 404, {});
@@ -197,6 +208,9 @@ test('broad words and sexual content, with MyAnimeList down', async () => {
   assert.deepEqual(tags.i6, ['sexual content'], 'linked to AniList by title and year, then judged by its tags');
   assert.equal('i7' in tags, false, 'live action: not on AniList, judged by its keywords only');
   assert.deepEqual(searched, ['Anime Film'], 'only the anime without a link is searched for');
+  assert.deepEqual(out.writeFailures.map((f) => f.item), ['Broken series'], 'reported, and the others were still saved');
+  const stamps = JSON.parse(await readFile(process.env.FILTER_STAMPS_PATH, 'utf8'));
+  assert.equal('i8' in stamps.items, false, 'a title whose save failed is not on record, so it is tried again');
 
   const blocked = writes.policies.find((w) => w.id === 'kid-0000-00000001').policy.BlockedTags.sort();
   assert.deepEqual(blocked, ['Female Harem', 'harem', 'reverse harem', 'sexual content'],

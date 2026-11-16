@@ -1665,11 +1665,13 @@ async function runFilterSync(token, why, quiet) {
       const changed = out.stamped.length + out.cleared.length + out.applied.length;
       // On the timer, say nothing when there was nothing to do. Ten minutes of
       // "no change" forever buries the lines that matter.
-      if (!quiet || changed || out.lookupFailures) {
+      const failed = out.writeFailures ?? [];
+      if (!quiet || changed || out.lookupFailures || failed.length) {
         log(`filter sync (${why}): ${out.people.length} people, ${out.tags.length} tag(s)`
           + `, library ${out.library} title(s) +${out.stamped.length} -${out.cleared.length}`
           + `, ${out.applied.length} jellyfin policy change(s)`
-          + `${out.lookupFailures ? `, ${out.lookupFailures} keyword lookup(s) failed` : ''}`);
+          + `${out.lookupFailures ? `, ${out.lookupFailures} keyword lookup(s) failed` : ''}`
+          + `${failed.length ? `, could not tag: ${failed.map(f => `${f.item} (${f.error})`).join('; ')}` : ''}`);
       }
     } while (filterSyncAgain);
     return out;

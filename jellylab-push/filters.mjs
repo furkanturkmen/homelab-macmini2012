@@ -919,6 +919,7 @@ export async function syncContentFilters(token) {
   }
 
   const stamped = [];
+  const writeFailures = [];
   const cleared = [];
   for (const { item } of library) {
     const current = new Set(item.Tags ?? []);
@@ -932,23 +933,44 @@ export async function syncContentFilters(token) {
     const toAdd = [...want].filter(t => !has.has(lower(t)));
     // Old markers always go; a word only when this sync added it and it is no
     // longer wanted.
-    const toRemove = [...current].filter(t => String(t).startsWith(MARKER_PREFIX) || (mine.has(t) && !wantLower.has(lower(t))));
-    const nowMine = [...current].filter(t => mine.has(t) && !toRemove.includes(t)).concat(toAdd);
-    if (nowMine.length) stamps.items[item.Id] = nowMine;
-    else delete stamps.items[item.Id];
-    if (!toAdd.length && !toRemove.length) continue;
+    // "sexual content" comes from nowhere but this sync, so it is always its
+    // own, on record or not (a run that stopped halfway leaves it unrecorded).
+    const own = (t) => mine.has(t) || lower(t) === SEXUAL_CONTENT_NAME;
+    const toRemove = [...current].filter(t => String(t).startsWith(MARKER_PREFIX) || (own(t) && !wantLower.has(lower(t))));
+    const nowMine = [...current].filter(t => own(t) && !toRemove.includes(t)).concat(toAdd);
+    const record = (tags) => {
+      if (tags.length) stamps.items[item.Id] = tags;
+      else delete stamps.items[item.Id];
+    };
+    if (!toAdd.length && !toRemove.length) {
+      record(nowMine);
+      continue;
+    }
 
     // Jellyfin replaces the whole item on POST, so the full record goes back
     // with only Tags changed. The user-scoped read is the one that returns it.
-    await unfilterLibrarian();
-    const full = await jellyfin(`/Users/${admin.Id}/Items/${item.Id}`, token);
-    await jellyfin(`/Items/${item.Id}`, token, {
-      method: 'POST',
-      body: JSON.stringify({
-        ...full,
-        Tags: [...current].filter(t => !toRemove.includes(t)).concat(toAdd),
-      }),
-    });
+    //
+    // Trickplay (the scrubbing previews) is left out: Jellyfin cannot read its
+    // own trickplay data back in an update and answers 500 for any title that
+    // has it. It is not part of what an update changes.
+    //
+    // One title failing does not stop the others. The record is only updated
+    // for a title whose write went through, so a failed one is tried again.
+    try {
+      await unfilterLibrarian();
+      const { Trickplay, ...full } = await jellyfin(`/Users/${admin.Id}/Items/${item.Id}`, token);
+      await jellyfin(`/Items/${item.Id}`, token, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...full,
+          Tags: [...current].filter(t => !toRemove.includes(t)).concat(toAdd),
+        }),
+      });
+    } catch (err) {
+      writeFailures.push({ item: item.Name, error: err.message });
+      continue;
+    }
+    record(nowMine);
     if (toAdd.length) stamped.push({ item: item.Name, tags: toAdd });
     if (toRemove.length) cleared.push({ item: item.Name, tags: toRemove });
   }
@@ -991,7 +1013,7 @@ export async function syncContentFilters(token) {
   }
   await saveStamps(stamps);
 
-  return { people, tags: [...union], stamped, cleared, applied, lookupFailures, library: library.length, expansions, sexual };
+  return { people, tags: [...union], stamped, cleared, applied, lookupFailures, library: library.length, expansions, sexual, writeFailures };
 }
 
 /* ------------------------------------------------ for the filter page */
