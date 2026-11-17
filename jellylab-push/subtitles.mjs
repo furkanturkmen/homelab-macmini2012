@@ -121,12 +121,14 @@ let busy = false;
 let again = false;
 
 /**
- * Prepare everything not yet done. One run at a time; a call during a run
- * makes it look again when it finishes, so a new import is never skipped.
+ * Prepare everything not yet done. One run at a time. An import during a run
+ * (`newFile`) makes it look again straight away, so the new file goes before
+ * the rest of a catch-up; the timer during a run is ignored, since the run
+ * already covers everything the timer would find.
  */
-export async function prepareSubtitles(apiKey) {
+export async function prepareSubtitles(apiKey, { newFile = false } = {}) {
   if (busy) {
-    again = true;
+    if (newFile) again = true;
     return;
   }
   busy = true;

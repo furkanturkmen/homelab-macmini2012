@@ -1265,7 +1265,7 @@ const server = createServer(async (req, res) => {
       // Jellyfin needs a moment to pick the new file up before its subtitles
       // can be prepared; the timer below catches it otherwise.
       if ((vars.sonarr_eventtype || vars.radarr_eventtype) === 'Download') {
-        setTimeout(subtitlesTick, SUBTITLES_AFTER_IMPORT_MS).unref();
+        setTimeout(subtitlesTick, SUBTITLES_AFTER_IMPORT_MS, true).unref();
       }
       return send(res, 200, out);
     } catch (err) {
@@ -1764,10 +1764,10 @@ if (JELLYFIN_API_KEY) {
 const SUBTITLES_MS = Number(process.env.SUBTITLES_MS) || 5 * 60 * 1000;
 const SUBTITLES_AFTER_IMPORT_MS = 60 * 1000;
 
-async function subtitlesTick() {
+async function subtitlesTick(newFile = false) {
   if (!JELLYFIN_API_KEY) return;
   try {
-    await subtitles.prepareSubtitles(JELLYFIN_API_KEY);
+    await subtitles.prepareSubtitles(JELLYFIN_API_KEY, { newFile });
   } catch (err) {
     log(`subtitles failed: ${err.message}`);
   }
