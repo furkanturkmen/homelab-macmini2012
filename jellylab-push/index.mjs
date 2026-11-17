@@ -48,6 +48,7 @@ import { statfs, readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import * as filters from './filters.mjs';
 import * as notify from './notify.mjs';
 import * as stale from './stale.mjs';
+import * as subtitles from './subtitles.mjs';
 
 const {
   PUSH_PORT = '8099',
@@ -1260,7 +1261,13 @@ const server = createServer(async (req, res) => {
     try {
       const form = new URLSearchParams(await readText(req, 64_000));
       const vars = Object.fromEntries([...form].map(([k, v]) => [k.toLowerCase(), v]));
-      return send(res, 200, await notify.handleArrEvent(vars));
+      const out = await notify.handleArrEvent(vars);
+      // Jellyfin needs a moment to pick the new file up before its subtitles
+      // can be prepared; the timer below catches it otherwise.
+      if ((vars.sonarr_eventtype || vars.radarr_eventtype) === 'Download') {
+        setTimeout(subtitlesTick, SUBTITLES_AFTER_IMPORT_MS).unref();
+      }
+      return send(res, 200, out);
     } catch (err) {
       log(`notify failed: ${err.message}`);
       return send(res, err.status ?? 500, { error: err.message });
@@ -1751,4 +1758,22 @@ if (JELLYFIN_API_KEY) {
   log(`filter sync every ${Math.round(FILTER_SYNC_MS / 60000)} min`);
 } else {
   log('filter sync idle: no JELLYFIN_API_KEY');
+}
+
+/* Subtitles pulled out of new files before anyone plays them (subtitles.mjs). */
+const SUBTITLES_MS = Number(process.env.SUBTITLES_MS) || 5 * 60 * 1000;
+const SUBTITLES_AFTER_IMPORT_MS = 60 * 1000;
+
+async function subtitlesTick() {
+  if (!JELLYFIN_API_KEY) return;
+  try {
+    await subtitles.prepareSubtitles(JELLYFIN_API_KEY);
+  } catch (err) {
+    log(`subtitles failed: ${err.message}`);
+  }
+}
+
+if (JELLYFIN_API_KEY) {
+  setInterval(subtitlesTick, SUBTITLES_MS).unref();
+  setTimeout(subtitlesTick, 30000).unref();
 }

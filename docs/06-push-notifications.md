@@ -217,6 +217,14 @@ qualities, copies nobody shares, a download stuck at 0%, or good copies that
 simply were never grabbed (a search fixes that one). `GET /stale` on port 8099
 shows the list and the wording without sending anything.
 
+**Subtitles ready on import.** The same import event also has jellylab-push
+(`subtitles.mjs`) ask Jellyfin for the new file's subtitles a minute later.
+Subtitles inside a video file are spread through all of it, so the first time
+someone turns them on Jellyfin has to read the whole file, which takes 20–35
+seconds per episode. Done ahead of time, they appear straight away. It works one
+file at a time, newest first, and on its first run catches up on the whole
+library in the background (hours, once). It needs `JELLYFIN_API_KEY`.
+
 ---
 
 ## Step 6.6 — Native notifications in your own app (optional, needs a paid Apple account)
