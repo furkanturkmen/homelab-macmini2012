@@ -284,6 +284,30 @@ Hardlinked library files are unaffected either way.
 until the disk is 100 MB from full". A full media disk takes down every service
 writing to it, including the ones that have nothing to do with media. 10 GB.
 
+## R15 — Anime: English ASS where there is a choice
+
+ASS subtitles carry positions: a sign sits at the top, dialogue at the bottom.
+Converted to SRT, both land in the same spot and overlap. A "raw" release has
+no English at all, so Bazarr's SRT is all there is. Release names do not say
+which you get, so jellylab-push (`anime-subs.mjs`) learns it from files:
+
+- Every anime import is looked at in Jellyfin and its release group counted:
+  English ASS inside, English of another kind, or none. On start it does the
+  same once for the whole library.
+- Groups with at least 3 files, 80% of them with English ASS, go into the
+  custom format **English ASS group** (a release-group condition), scored
+  **+30** in every profile. Equal releases tip toward them; nothing is refused,
+  and SRT-only anime still downloads when that is all there is.
+- A new season or episode without English ASS gets one search for the same
+  episodes from such a group, at the same or better resolution, that Sonarr
+  would otherwise accept (only "already have it" rejections are overlooked).
+  Found: grabbed, the current files stay until it arrives, and if Sonarr
+  holds it back as "not an upgrade" it is imported by hand from the queue.
+  Not found: kept. Either way one push says so, and that season is not looked
+  at again for 30 days.
+
+The list and counts are in `jellylab-push-data/anime-subs.json`.
+
 ## How to find out which rule is costing you
 
 Do not reason about it from the config — measure. Run interactive searches on

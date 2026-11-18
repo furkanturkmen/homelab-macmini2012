@@ -98,45 +98,50 @@ def ensure_propers(a):
         a.write('config/mediamanagement', cfg, 'PUT')
 
 
-def ensure_format(a, name, regex, group_regex=None):
-    """R0b and R7 - a custom format exists.
+def ensure_format(a, name, regex=None, group_regex=None):
+    """R0b and R7 - a custom format exists, with exactly this one condition:
+    a release title regex, or a release group regex.
 
-    The shape is copied from the formats already in Sonarr, so these sit
-    alongside them rather than looking foreign in the UI.
+    One condition per format, never two kinds in one. Sonarr and Radarr
+    require a match from *every kind* of condition in a format, so a title
+    condition next to a group condition is an AND, whatever `required` says.
+    R12 was built that way as an "or" and only ever matched VOSTFR releases
+    by Tsundere-Raws: a French-subtitled series from another group scored
+    -20 instead of -10000 and was downloaded.
 
-    With a group_regex the two conditions are an OR (neither is `required`),
-    which is what R12 needs: the title carries the marker on the way in, and
-    the release group is the only thing still known about a file already
-    imported. Matching the group is what re-scores what is on disk, and an
-    upgrade is only possible once the file on disk scores badly.
+    A format that exists with other conditions is rewritten to this one.
     """
-    if name in {c['name'] for c in a.get('customformat')}:
+    if (regex is None) == (group_regex is None):
+        raise ValueError('ensure_format takes a title regex or a group regex, not both')
+    kind, value = (('ReleaseTitleSpecification', regex) if regex is not None
+                   else ('ReleaseGroupSpecification', group_regex))
+    spec = {
+        'name': name,
+        'implementation': kind,
+        'negate': False,
+        'required': True,
+        'fields': [{'name': 'value', 'value': value}],
+    }
+    shape = lambda specs: [(s['implementation'], s['negate'], s['required'],
+                            {f['name']: f['value'] for f in s['fields']}.get('value'))
+                           for s in specs]
+    existing = next((c for c in a.get('customformat') if c['name'] == name), None)
+    if existing and shape(existing['specifications']) == shape([spec]):
         a.say(f'custom format "{name}" exists', False)
         return
-    a.say(f'create custom format "{name}"  {regex}'
-          + (f'  or group {group_regex}' if group_regex else ''))
+    what = f'{"title" if regex is not None else "group"} {value}'
+    if existing:
+        a.say(f'rewrite custom format "{name}" to one condition: {what}')
+    else:
+        a.say(f'create custom format "{name}"  {what}')
     if not a.apply:
         return
-    specs = [{
-        'name': name,
-        'implementation': 'ReleaseTitleSpecification',
-        'negate': False,
-        'required': not group_regex,
-        'fields': [{'name': 'value', 'value': regex}],
-    }]
-    if group_regex:
-        specs.append({
-            'name': f'{name} (group)',
-            'implementation': 'ReleaseGroupSpecification',
-            'negate': False,
-            'required': False,
-            'fields': [{'name': 'value', 'value': group_regex}],
-        })
-    a.write('customformat', {
-        'name': name,
-        'includeCustomFormatWhenRenaming': False,
-        'specifications': specs,
-    }, 'POST')
+    body = {'name': name, 'includeCustomFormatWhenRenaming': False, 'specifications': [spec]}
+    if existing:
+        body = {**existing, 'specifications': [spec]}
+        a.write(f'customformat/{existing["id"]}', body, 'PUT')
+    else:
+        a.write('customformat', body, 'POST')
 
 
 # Per-profile score overrides. Empty now: R11 existed for Ultra-HD, which was
@@ -283,12 +288,17 @@ def main():
             if name == 'radarr':
                 ensure_format(a, 'Italian release', r'\b(ITA|ITALIAN)\b')
             # R12 - burned-in subtitles cannot be turned off, ever.
+            # The title marks a release on the way in; the group is all that
+            # is still known about a file already imported. Two formats, so
+            # either one is enough (see ensure_format).
             ensure_format(a, 'French hardsub (VOSTFR)',
-                          r'\bVOSTFR\b|\bVOSTA\b|\bHARDSUB',
-                          group_regex=r'Tsundere-Raws')
+                          r'\bVOSTFR\b|\bVOSTA\b|\bHARDSUB')
+            ensure_format(a, 'French hardsub group',
+                          group_regex=r'Tsundere-Raws|Punisher694')
             ensure_profiles(a, {'Repack/Proper': 5, 'Italian release': -1000,
                                 'HEVC (x265)': -20, 'AV1': -25,
-                                'French hardsub (VOSTFR)': -10000})
+                                'French hardsub (VOSTFR)': -10000,
+                                'French hardsub group': -10000})
             # Container path, and it must sit on the same filesystem as the
             # library or every delete becomes a slow copy. Dot-prefixed so
             # Jellyfin does not index it as a library.

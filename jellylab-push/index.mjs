@@ -49,6 +49,7 @@ import * as filters from './filters.mjs';
 import * as notify from './notify.mjs';
 import * as stale from './stale.mjs';
 import * as subtitles from './subtitles.mjs';
+import * as animeSubs from './anime-subs.mjs';
 
 const {
   PUSH_PORT = '8099',
@@ -1267,6 +1268,7 @@ const server = createServer(async (req, res) => {
       if ((vars.sonarr_eventtype || vars.radarr_eventtype) === 'Download') {
         setTimeout(subtitlesTick, SUBTITLES_AFTER_IMPORT_MS, true).unref();
       }
+      if (vars.sonarr_eventtype === 'Download') animeSubs.noteImport(vars);
       return send(res, 200, out);
     } catch (err) {
       log(`notify failed: ${err.message}`);
@@ -1776,4 +1778,23 @@ async function subtitlesTick(newFile = false) {
 if (JELLYFIN_API_KEY) {
   setInterval(subtitlesTick, SUBTITLES_MS).unref();
   setTimeout(subtitlesTick, 30000).unref();
+}
+
+/* Anime: English ASS preferred (anime-subs.mjs). */
+const ANIME_SUBS_MS = 5 * 60 * 1000;
+
+async function animeSubsTick() {
+  try {
+    await animeSubs.importStuckSwaps();
+  } catch (err) {
+    log(`anime subs: import check failed: ${err.message}`);
+  }
+}
+
+if (JELLYFIN_API_KEY && process.env.SONARR_API_KEY) {
+  setInterval(animeSubsTick, ANIME_SUBS_MS).unref();
+  // Start the group list from the library as it is; later imports add to it.
+  setTimeout(() => animeSubs.learnFromLibrary()
+    .then(r => r.counted && log(`anime subs: learned from ${r.counted} file(s), ${r.groups.length} group(s) with English ASS`))
+    .catch(err => log(`anime subs: learning failed: ${err.message}`)), 60000).unref();
 }
