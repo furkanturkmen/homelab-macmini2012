@@ -34,11 +34,11 @@ test('done files are skipped, a replaced file (new size) is done again', () => {
   assert.equal(filesToPrepare([episode('a', [sub(2, 'ass')], 2000)], record, NOW).length, 1);
 });
 
-test('a failed file waits a day before it is tried again', () => {
+test('a failed file waits an hour before it is tried again', () => {
   const record = empty();
-  record.failed['a:srca:1000'] = { at: '2026-11-18T06:00:00Z', error: 'answered 500' };
+  record.failed['a:srca:1000'] = { at: '2026-11-18T11:30:00Z', error: 'answered 500' };
   assert.deepEqual(filesToPrepare([episode('a', [sub(2, 'ass')])], record, NOW), []);
-  record.failed['a:srca:1000'].at = '2026-11-17T06:00:00Z';
+  record.failed['a:srca:1000'].at = '2026-11-18T10:30:00Z';
   assert.equal(filesToPrepare([episode('a', [sub(2, 'ass')])], record, NOW).length, 1);
 });
 

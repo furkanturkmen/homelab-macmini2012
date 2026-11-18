@@ -23,7 +23,10 @@ import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 const JELLYFIN_URL = process.env.JELLYFIN_URL || 'http://jellyfin:8096';
 const RECORD_PATH = process.env.SUBTITLES_READY_PATH
   || `${process.env.DATA_DIR || '/data'}/subtitles-ready.json`;
-const RETRY_FAILED_MS = 24 * 3600 * 1000;
+// Short: the usual failure is a file Jellyfin is still rescanning (its track
+// numbers change when a subtitle file appears next to it), which is fine an
+// hour later. A file that keeps failing costs one request an hour.
+const RETRY_FAILED_MS = 3600 * 1000;
 // Reading a big file over a busy disk can take minutes; anything longer is stuck.
 const REQUEST_TIMEOUT_MS = 15 * 60 * 1000;
 
