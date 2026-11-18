@@ -160,7 +160,12 @@ def main():
                     continue
                 p = os.path.join(d, n)
                 st = os.stat(p)
-                key = f'{p}\t{int(st.st_mtime)}'
+                # Size as well as time: a remux that keeps the date (new
+                # subtitle tracks put in) is a different file and is looked at
+                # again. Keyed on time alone, episodes once probed with only an
+                # unreadable WebVTT track stayed "no English" after it was
+                # converted, and showed their signs over the dialogue.
+                key = f'{p}\t{int(st.st_mtime)}\t{st.st_size}'
                 stem = os.path.splitext(n)[0]
                 if key in seen or st.st_mtime > time.time() - 600:
                     continue
