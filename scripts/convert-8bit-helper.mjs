@@ -59,24 +59,40 @@ function run(cmd, args, { stdin, stdout, priority } = {}) {
   });
 }
 
-const remote = (args, io) => run('ssh', [host, `${REMOTE} ${args}`], io);
+// A connection that dies (this computer slept, the network dropped) should
+// fail within two minutes, not hang a transfer for hours.
+const SSH = ['-o', 'ServerAliveInterval=30', '-o', 'ServerAliveCountMax=4', '-o', 'BatchMode=yes'];
+const remote = (args, io) => run('ssh', [...SSH, host, `${REMOTE} ${args}`], io);
 
 // Windows sleeps an idle computer, locked or not; a long encode does not count
 // as activity. Ask it to stay awake for as long as this runs, the same request
 // a video player makes. Nothing is changed in the power settings.
+// The flag is ES_CONTINUOUS | ES_SYSTEM_REQUIRED written in decimal: PowerShell
+// reads 0x80000001 as a negative int, the call then fails, and the computer
+// slept mid-file. The call answers the previous state, which is never 0; 0 or
+// no answer means it did not take, and that is said out loud.
 let awake = null;
 if (process.platform === 'win32') {
   awake = spawn('powershell', ['-NoProfile', '-Command',
     'Add-Type -Name P -Namespace W -MemberDefinition \'[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);\';'
-    + ' [W.P]::SetThreadExecutionState(0x80000001) | Out-Null; while ($true) { Start-Sleep 3600 }'],
-  { stdio: 'ignore', windowsHide: true });
+    + ' [W.P]::SetThreadExecutionState(2147483649); while ($true) { Start-Sleep 3600 }'],
+  { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  let answered = false;
+  awake.stdout.on('data', (d) => {
+    if (!answered) {
+      answered = true;
+      log(Number(String(d).trim()) ? 'keeping this computer awake while converting'
+        : 'WARNING: could not keep this computer awake; it may sleep mid-file');
+    }
+  });
+  awake.stderr.on('data', (d) => log(`WARNING: keep-awake: ${String(d).trim().split('\n')[0]}`));
 }
 
 let current = null;
 function stop() {
   if (current) {
     log('giving the current file back to the server');
-    spawnSync('ssh', [host, `${REMOTE} --release ${current}`], { stdio: 'ignore' });
+    spawnSync('ssh', [...SSH, host, `${REMOTE} --release ${current}`], { stdio: 'ignore' });
   }
   awake?.kill();
   rmSync(work, { recursive: true, force: true });
