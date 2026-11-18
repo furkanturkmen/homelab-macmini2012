@@ -16,6 +16,14 @@ Episodes that already have an English sidecar (Bazarr's, or this script's)
 are left alone, so does a file with no English text track; both are
 remembered and not probed again.
 
+A file whose English dialogue is ASS is left alone too. jellylab-push
+(subtitles.mjs) now has Jellyfin pull every new file's subtitles out ahead of
+time, so the slow first load this script was written for no longer happens,
+and an ASS track draws signs and dialogue in their places where a sidecar
+cannot. A sidecar next to it was only a worse choice in the menu - and adding
+it renumbers the file's subtitle tracks under a player that has the old list
+open, which is how an episode's subtitles stopped loading mid-watch.
+
 Runs from cron. --dry-run only reports.
 """
 import argparse
@@ -77,7 +85,7 @@ def ct(*args, timeout=900):
 
 
 def english_track(inside):
-    """Index of the English dialogue track, or None."""
+    """(index, codec) of the English dialogue track, or None."""
     r = ct(f'{FF}/ffprobe', '-v', 'fatal', '-select_streams', 's', '-show_streams',
            '-of', 'json', inside, timeout=120)
     if r.returncode:
@@ -93,8 +101,8 @@ def english_track(inside):
             continue
         rank = (s.get('disposition', {}).get('default', 0), -s['index'])
         if best is None or rank > best[0]:
-            best = (rank, s['index'])
-    return best and best[1]
+            best = (rank, s['index'], s.get('codec_name'))
+    return best and (best[1], best[2])
 
 
 def ts(t):
@@ -178,10 +186,11 @@ def main():
     for _, p, key in sorted(todo, reverse=True):
         inside = p.replace(MEDIA, IN_CONTAINER, 1)
         rel = os.path.relpath(p, MEDIA)
-        idx = english_track(inside)
-        if idx is None:
+        found = english_track(inside)
+        if found is None or found[1] in ('ass', 'ssa'):
             seen.add(key)
             continue
+        idx = found[0]
         if args.dry_run:
             print(f'WOULD extract track {idx}: {rel}')
             continue
