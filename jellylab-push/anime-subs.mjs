@@ -221,12 +221,15 @@ let qbitCookie = null;
 async function qbitLogin() {
   const res = await fetch(`${QBIT_URL}/api/v2/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    // qBittorrent rejects a login whose Referer is not its own origin.
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Referer: QBIT_URL },
     body: new URLSearchParams({ username: QBIT_USER, password: QBIT_PASSWORD }),
     signal: AbortSignal.timeout(15000),
   });
-  const cookie = res.headers.get('set-cookie')?.match(/SID=[^;]+/)?.[0];
-  if (!res.ok || !cookie) throw new Error(`qbittorrent login answered ${res.status}`);
+  // The cookie is QBT_SID_<port> on this version, SID on older ones; a failed
+  // login is a 200 with no cookie at all (index.mjs qbitLogin has the story).
+  const cookie = (res.headers.get('set-cookie') ?? '').split(';')[0];
+  if (!/^[^=]*SID[^=]*=./i.test(cookie)) throw new Error(`qbittorrent login answered ${res.status} without a session`);
   qbitCookie = cookie;
 }
 
@@ -235,7 +238,7 @@ async function qbit(path, form) {
     if (!qbitCookie) await qbitLogin();
     const res = await fetch(`${QBIT_URL}/api/v2/${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: qbitCookie },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: qbitCookie, Referer: QBIT_URL },
       body: new URLSearchParams(form),
       signal: AbortSignal.timeout(15000),
     });
