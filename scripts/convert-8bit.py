@@ -19,6 +19,7 @@ has the file open.
 Runs from cron, one file at a time. --dry-run only lists what it would do.
 """
 import argparse
+import collections
 import fcntl
 import json
 import os
@@ -120,17 +121,22 @@ def playing(path):
 
 def candidates():
     """Files to look at. The episodes right after one someone is watching come
-    first, in order, so the conversion stays ahead of the viewer."""
-    found = []
+    first, in order, so the conversion stays ahead of the viewer. Then whole
+    shows, smallest first: a show with hundreds of episodes would otherwise
+    hold up every short show behind it in the alphabet for days."""
+    found, show = [], {}
     for rel in DIRS:
-        for d, dirs, files in os.walk(os.path.join(MEDIA, rel)):
+        root = os.path.join(MEDIA, rel)
+        for d, dirs, files in os.walk(root):
             dirs[:] = [x for x in dirs if not x.startswith('.')]
             for n in sorted(files):
                 if n.lower().endswith(VIDEO) and not n.startswith('.'):
                     p = os.path.join(d, n)
                     if os.stat(p).st_mtime < time.time() - MIN_AGE:
                         found.append(p)
-    found.sort()
+                        show[p] = os.path.join(root, os.path.relpath(p, root).split(os.sep)[0])
+    size = collections.Counter(show.values())
+    found.sort(key=lambda p: (size[show[p]], show[p], p))
     now = sorted(s['NowPlayingItem'].get('Path', '').replace(IN_CONTAINER, MEDIA, 1) for s in sessions())
     ahead = [p for p in found if any(os.path.dirname(p) == os.path.dirname(w) and p > w for w in now)]
     return ahead + [p for p in found if p not in ahead]
@@ -225,17 +231,33 @@ def main():
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         return
-    for src in candidates():
-        info = probe(src)
-        if not info or not ten_bit(info):
-            continue
-        if args.dry_run:
-            print(f'WOULD convert {os.path.relpath(src, MEDIA)}')
-            continue
-        failed = load_failed()
-        if failed.get(src) == stamp(src):
-            continue
-        before = stamp(src)
+    # The order is worked out again after every file, so someone who starts
+    # watching mid-run gets their next episodes first, and a show added or
+    # removed meanwhile is noticed. Probe results are kept per file version:
+    # probing the whole library again each time would take minutes.
+    known = {}
+    while True:
+        todo = None
+        for src in candidates():
+            try:
+                now = stamp(src)
+            except FileNotFoundError:  # deleted since the folder was listed
+                continue
+            if known.get(src, (None,))[0] != now:
+                known[src] = (now, probe(src))
+            info = known[src][1]
+            if not info or not ten_bit(info):
+                continue
+            if args.dry_run:
+                print(f'WOULD convert {os.path.relpath(src, MEDIA)}')
+                continue
+            if load_failed().get(src) == now:
+                continue
+            todo = (src, info, now)
+            break
+        if not todo:
+            return
+        src, info, before = todo
         ok = convert(src, info)
         failed = load_failed()
         if ok:
