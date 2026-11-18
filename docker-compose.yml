@@ -758,6 +758,9 @@ services:
       - ./jellylab-push-data:/data
       # read-only, purely so /storage can report free space on the media disk
       - ${MEDIA_ROOT:?set MEDIA_ROOT in .env}:/media:ro
+      # Jellyfin's saved subtitles, so subtitles.mjs can clear an episode's when
+      # its tracks are renumbered (a subtitle file appearing beside it).
+      - ./jellyfin/config/data/subtitles:/jellyfin-subtitles
     depends_on:
       - ntfy
 

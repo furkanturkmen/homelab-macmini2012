@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { filesToPrepare, pruneRecord, liveKeys } from '../subtitles.mjs';
+import { filesToPrepare, pruneRecord, liveKeys, renumbered, savedSubtitlesDir } from '../subtitles.mjs';
 
 const NOW = Date.parse('2026-11-18T12:00:00Z');
 const empty = () => ({ ready: {}, failed: {} });
@@ -50,5 +50,25 @@ test('keeps the library order (newest first)', () => {
 test('forgets files that left the library', () => {
   const record = { ready: { 'a:srca:1000': 'x', 'gone:src:1': 'x' }, failed: { 'gone:src:2': { at: 'x' } } };
   const pruned = pruneRecord(record, liveKeys([episode('a', [])]));
-  assert.deepEqual(pruned, { ready: { 'a:srca:1000': 'x' }, failed: {} });
+  assert.deepEqual(pruned, { ready: { 'a:srca:1000': 'x' }, failed: {}, layout: {} });
+});
+
+test('a subtitle file appearing beside an episode is a renumbering', () => {
+  const before = episode('a', [sub(2, 'ass'), sub(3, 'ass')]);
+  const first = renumbered([before], {});
+  assert.deepEqual(first.changed, []);                       // first sight: only remembered
+  const same = renumbered([before], first.layout);
+  assert.deepEqual(same.changed, []);
+  const after = episode('a', [sub(0, 'subrip', { IsExternal: true, Language: 'tur' }), sub(3, 'ass'), sub(4, 'ass')]);
+  assert.deepEqual(renumbered([after], first.layout).changed, ['a']);
+});
+
+test('items with nothing inside the file are not watched', () => {
+  const ext = episode('b', [sub(0, 'subrip', { IsExternal: true })]);
+  assert.deepEqual(renumbered([ext], {}).layout, {});
+});
+
+test('the saved-subtitles folder matches the one Jellyfin uses', () => {
+  assert.equal(savedSubtitlesDir('47d51cfedc6b029bcfb8b8fb71913cfb'),
+    '/jellyfin-subtitles/47/47d51cfe-dc6b-029b-cfb8-b8fb71913cfb');
 });
