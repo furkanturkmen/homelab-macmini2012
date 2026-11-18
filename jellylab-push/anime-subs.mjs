@@ -23,7 +23,10 @@
  *    RETRY_DAYS, so nothing loops.
  * 3. A replacement Sonarr will not import because it does not score higher
  *    ("not an upgrade") is imported by hand from the queue, since swapping is
- *    exactly what was asked for.
+ *    exactly what was asked for. Until then it is tagged "Keep" in
+ *    qBittorrent: decluttarr removes "not an upgrade" downloads within minutes
+ *    and leaves Keep alone. The tag comes off once the swap has left the
+ *    queue, so decluttarr looks after it like any other download again.
  *
  * SRT-only anime is still downloaded as before. This only prefers.
  */
@@ -36,7 +39,12 @@ const {
   SONARR_API_KEY = '',
   JELLYFIN_URL = 'http://jellyfin:8096',
   JELLYFIN_API_KEY = '',
+  QBIT_URL = '',
+  QBIT_USER = '',
+  QBIT_PASSWORD = '',
 } = process.env;
+
+export const KEEP_TAG = 'Keep';
 
 const STORE_PATH = process.env.ANIME_SUBS_PATH || `${process.env.DATA_DIR || '/data'}/anime-subs.json`;
 export const FORMAT_NAME = 'English ASS group';
@@ -111,7 +119,7 @@ export function pickReplacement(releases, current, assNames) {
 
 /** Queue rows of our swaps that Sonarr will not import on its own. */
 export function stuckSwaps(queue, swaps) {
-  const ours = new Map(Object.values(swaps).filter(s => s.downloadId)
+  const ours = new Map(Object.values(swaps).filter(s => s.downloadId && s.result === 'grabbed')
     .map(s => [s.downloadId.toLowerCase(), s]));
   return queue.filter(q => q.downloadId && ours.has(q.downloadId.toLowerCase())
     && q.trackedDownloadState === 'importBlocked');
@@ -203,6 +211,70 @@ export async function syncFormat(store) {
   }
 }
 
+/*
+ * qBittorrent, logged in once. Every login is a new session, and a client that
+ * logs in per request piles them up (the arrs did, see the qBit session loop);
+ * so the cookie is kept and only replaced when qBittorrent refuses it.
+ */
+let qbitCookie = null;
+
+async function qbitLogin() {
+  const res = await fetch(`${QBIT_URL}/api/v2/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ username: QBIT_USER, password: QBIT_PASSWORD }),
+    signal: AbortSignal.timeout(15000),
+  });
+  const cookie = res.headers.get('set-cookie')?.match(/SID=[^;]+/)?.[0];
+  if (!res.ok || !cookie) throw new Error(`qbittorrent login answered ${res.status}`);
+  qbitCookie = cookie;
+}
+
+async function qbit(path, form) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!qbitCookie) await qbitLogin();
+    const res = await fetch(`${QBIT_URL}/api/v2/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: qbitCookie },
+      body: new URLSearchParams(form),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.status === 403) { qbitCookie = null; continue; }
+    if (!res.ok) throw new Error(`qbittorrent ${path} answered ${res.status}`);
+    return res.text();
+  }
+  throw new Error(`qbittorrent ${path}: refused after a fresh login`);
+}
+
+/** The torrent's hash, from what Sonarr's release carries. */
+export function torrentHash(release) {
+  if (release.infoHash) return release.infoHash.toLowerCase();
+  const m = String(release.guid ?? release.magnetUrl ?? '').match(/btih:([0-9a-f]{40})/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/**
+ * Tag a swap Keep. Sonarr hands the torrent to qBittorrent a moment after the
+ * grab, so a missing torrent is tried again for a minute.
+ */
+async function keep(hash) {
+  if (!QBIT_URL || !hash) return false;
+  for (let i = 0; i < 12; i++) {
+    const info = JSON.parse(await qbit('torrents/info', { hashes: hash }) || '[]');
+    if (info.length) {
+      await qbit('torrents/addTags', { hashes: hash, tags: KEEP_TAG });
+      return true;
+    }
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  return false;
+}
+
+async function unkeep(hash) {
+  if (!QBIT_URL || !hash) return;
+  await qbit('torrents/removeTags', { hashes: hash, tags: KEEP_TAG });
+}
+
 /* ------------------------------------------------------------------ flow */
 
 const pending = new Map();   // `${seriesId}:${season}` -> { fileIds:Set, timer }
@@ -283,11 +355,14 @@ async function checkSeason(seriesId, season, fileIds, tries = 0) {
     return;
   }
   await sonarr('release', { method: 'POST', body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }) });
+  const hash = torrentHash(pick);
   store.swaps[key] = {
     at: new Date().toISOString(), result: 'grabbed', title: pick.title,
-    downloadId: pick.infoHash || null, seriesId,
+    downloadId: hash, seriesId,
   };
   await saveStore(store);
+  const kept = await keep(hash).catch(err => (log(`anime subs: could not tag ${pick.title} Keep: ${err.message}`), false));
+  if (!kept) log(`anime subs: ${pick.title} not tagged Keep; decluttarr may remove it if Sonarr refuses it`);
   log(`anime subs: ${label}: ${what}, grabbed ${pick.title}`);
   await publish({
     title: `Subtitles: ${label}`,
@@ -304,8 +379,22 @@ async function checkSeason(seriesId, season, fileIds, tries = 0) {
 export async function importStuckSwaps() {
   if (!SONARR_API_KEY) return;
   const store = await loadStore();
-  if (!Object.values(store.swaps).some(s => s.downloadId && s.result === 'grabbed')) return;
+  if (!Object.values(store.swaps).some(s => s.downloadId && ['grabbed', 'imported'].includes(s.result))) return;
   const queue = (await sonarr('queue?pageSize=500')).records ?? [];
+  // Swaps that have left the queue are finished, however that happened: the
+  // Keep tag comes off so decluttarr treats the torrent like any other again.
+  const inQueue = new Set(queue.map(q => q.downloadId?.toLowerCase()).filter(Boolean));
+  for (const swap of Object.values(store.swaps)) {
+    if (!swap.downloadId || !['grabbed', 'imported'].includes(swap.result)) continue;
+    if (inQueue.has(swap.downloadId.toLowerCase())) continue;
+    try {
+      await unkeep(swap.downloadId.toLowerCase());
+      swap.result = 'done';
+      log(`anime subs: ${swap.title} has left the queue, Keep removed`);
+    } catch (err) {
+      log(`anime subs: could not remove Keep from ${swap.title}: ${err.message}`);
+    }
+  }
   const seen = new Set();
   for (const row of stuckSwaps(queue, store.swaps)) {
     if (seen.has(row.downloadId)) continue;
@@ -337,6 +426,7 @@ export async function recordSwap({ key, title, downloadId, seriesId }) {
   const store = await loadStore();
   store.swaps[key] = { at: new Date().toISOString(), result: 'grabbed', title, downloadId, seriesId };
   await saveStore(store);
+  await keep(downloadId?.toLowerCase());
 }
 
 /**

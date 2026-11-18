@@ -753,6 +753,11 @@ services:
       # Read-only; this never runs a search of its own.
       PROWLARR_URL: "http://prowlarr:9696"
       PROWLARR_API_KEY: "${PROWLARR_API_KEY}"
+      # anime-subs.mjs tags its swaps "Keep" so decluttarr leaves them alone
+      # while Sonarr refuses them as "not an upgrade".
+      QBIT_URL: "http://gluetun:8083"
+      QBIT_USER: "${QBIT_USER}"
+      QBIT_PASSWORD: "${QBIT_PASSWORD}"
     volumes:
       - ./jellylab-push:/app:ro
       - ./jellylab-push-data:/data

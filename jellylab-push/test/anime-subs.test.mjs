@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { englishSubs, assGroups, groupRegex, pickReplacement, stuckSwaps } from '../anime-subs.mjs';
+import { englishSubs, assGroups, groupRegex, pickReplacement, stuckSwaps, torrentHash } from '../anime-subs.mjs';
 
 const sub = (Codec, Language, extra = {}) => ({ Type: 'Subtitle', Codec, Language, IsExternal: false, ...extra });
 
@@ -69,4 +69,15 @@ test('only our own swaps that Sonarr holds back are imported by hand', () => {
     { downloadId: 'other', trackedDownloadState: 'importBlocked' },
   ];
   assert.equal(stuckSwaps(queue, swaps).length, 1);
+});
+
+test('a swap is tagged by its torrent hash, from the release or its magnet', () => {
+  assert.equal(torrentHash({ infoHash: 'BAF5F051A0CD75AE7B3202E8DF8DD75B0E0763D1' }), 'baf5f051a0cd75ae7b3202e8df8dd75b0e0763d1');
+  assert.equal(torrentHash({ guid: 'magnet:?xt=urn:btih:7E8A65EA8A4749C1547D89CB9EE36256AA509AA1&dn=x' }), '7e8a65ea8a4749c1547d89cb9ee36256aa509aa1');
+  assert.equal(torrentHash({ guid: 'https://example.org/1' }), null);
+});
+
+test('a swap already imported by hand is not imported again', () => {
+  const swaps = { '87:1': { downloadId: 'abc', result: 'imported' } };
+  assert.equal(stuckSwaps([{ downloadId: 'abc', trackedDownloadState: 'importBlocked' }], swaps).length, 0);
 });

@@ -303,6 +303,9 @@ which you get, so jellylab-push (`anime-subs.mjs`) learns it from files:
   would otherwise accept (only "already have it" rejections are overlooked).
   Found: grabbed, the current files stay until it arrives, and if Sonarr
   holds it back as "not an upgrade" it is imported by hand from the queue.
+  Until it leaves the queue it is tagged **Keep** in qBittorrent: decluttarr
+  removes "not an upgrade" downloads within minutes and never touches Keep
+  (jellylab-push needs `QBIT_USER`/`QBIT_PASSWORD`, the same as decluttarr).
   Not found: kept. Either way one push says so, and that season is not looked
   at again for 30 days.
 
