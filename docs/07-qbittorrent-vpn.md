@@ -367,6 +367,18 @@ break DNS for everyone while 50 Mbit/s is invisible, and the difference on a
 38 GB download is about twenty minutes. That is a good trade for never being
 asked to fix the wifi again.
 
+Nobody needs the line at night, so the cap can follow the clock: no limit by
+default, and qBittorrent's scheduler switches to the capped "alternative"
+limits during the day (here 08:00 to midnight, every day, in the container's
+`TZ`):
+
+```bash
+docker exec gluetun sh -lc 'wget -qO- --post-data="json={\"dl_limit\":0,\"alt_dl_limit\":6291456,\"alt_up_limit\":2097152,\"scheduler_enabled\":true,\"schedule_from_hour\":8,\"schedule_from_min\":0,\"schedule_to_hour\":0,\"schedule_to_min\":0,\"scheduler_days\":0}" http://127.0.0.1:8083/api/v2/app/setPreferences'
+```
+
+The limits are in bytes per second. `transfer/speedLimitsMode` answers 1 while
+the daytime cap is on.
+
 Proper QoS on the router (fq_codel, cake) solves bufferbloat without giving up
 throughput, but it needs a router that supports it. The cap costs one command.
 
