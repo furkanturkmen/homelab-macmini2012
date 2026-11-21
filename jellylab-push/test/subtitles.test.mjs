@@ -18,6 +18,13 @@ test('asks for the first text track, in the format Jellyfin stores it as', () =>
   assert.equal(srt.name, 'A Show Episode b');
 });
 
+test('asks for a normal track over a forced one, which is often empty', () => {
+  const [f] = filesToPrepare([episode('a', [sub(2, 'subrip', { IsForced: true }), sub(3, 'subrip')])], empty(), NOW);
+  assert.equal(f.path, '/Videos/a/srca/Subtitles/3/0/Stream.srt');
+  const [only] = filesToPrepare([episode('b', [sub(2, 'subrip', { IsForced: true })])], empty(), NOW);
+  assert.equal(only.path, '/Videos/b/srcb/Subtitles/2/0/Stream.srt');
+});
+
 test('skips files with no built-in text subtitles', () => {
   const items = [
     episode('none', []),

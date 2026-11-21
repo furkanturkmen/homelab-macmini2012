@@ -57,8 +57,12 @@ export function filesToPrepare(items, record, now = Date.now()) {
   const out = [];
   for (const item of items) {
     for (const source of item.MediaSources ?? []) {
-      const track = (source.MediaStreams ?? []).find(s =>
+      // Asking for one track makes Jellyfin save them all. Not a forced one:
+      // web releases often carry an empty forced track, which Jellyfin cannot
+      // save, so the file was retried every hour although the rest was ready.
+      const text = (source.MediaStreams ?? []).filter(s =>
         s.Type === 'Subtitle' && !s.IsExternal && s.IsTextSubtitleStream);
+      const track = text.find(s => !s.IsForced) ?? text[0];
       if (!track) continue;
       const key = `${item.Id}:${source.Id}:${source.Size ?? ''}`;
       if (record.ready[key]) continue;
