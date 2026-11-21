@@ -80,6 +80,11 @@
         <span class="row" style="gap:10px"><span class="muted" id="signed-in"></span><button class="ghost" id="sign-out">Sign out</button></span>
       </div>
       <div class="people" id="people" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:14px">
+        <label for="new-people" style="margin:0;font-weight:500">New accounts start like</label>
+        <select id="new-people"></select>
+        <span class="hint" style="margin:0" id="new-people-status">an account made in Jellyfin gets this person's filter within a minute</span>
+      </div>
     </div>
 
     <div class="card" id="editor" hidden>
@@ -198,6 +203,7 @@
     $('app').hidden = false;
     $('signed-in').textContent = 'Signed in as ' + state.name;
     renderPeople();
+    renderNewPeople();
     if (state.person) select(state.person);
   }
 
@@ -235,6 +241,15 @@
         box.append(b);
       }
     }
+  }
+
+  function renderNewPeople() {
+    const sel = $('new-people');
+    sel.replaceChildren(new Option('nobody (not filtered)', ''));
+    for (const p of [...state.people].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (isFiltered(p.id)) sel.append(new Option(p.name, p.id));
+    }
+    sel.value = state.doc.newPeopleFrom && isFiltered(state.doc.newPeopleFrom) ? state.doc.newPeopleFrom : '';
   }
 
   function renderStartFrom() {
@@ -437,6 +452,22 @@
     $('start-from').value = '';
   });
 
+  $('new-people').addEventListener('change', async () => {
+    const sel = $('new-people');
+    sel.disabled = true;
+    try {
+      const out = await api('/filters/new-people', { method: 'PUT', body: JSON.stringify({ from: sel.value || null }) });
+      state.doc.newPeopleFrom = out.newPeopleFrom;
+      const who = state.people.find((p) => p.id === out.newPeopleFrom);
+      status($('new-people-status'), who ? 'Saved: new accounts get ' + who.name + '\'s filter.' : 'Saved: new accounts start unfiltered.', 'ok');
+    } catch (err) {
+      status($('new-people-status'), err.message, 'error');
+      renderNewPeople();
+    } finally {
+      sel.disabled = false;
+    }
+  });
+
   $('copy-all').addEventListener('click', async () => {
     const targets = state.people.filter((p) => isFiltered(p.id) || p.id === state.person);
     if (!window.confirm('Give these ' + targets.length + ' people exactly this filter?\n\n' + targets.map((p) => p.name).join(', '))) return;
@@ -521,7 +552,8 @@
       else delete state.doc.users[state.person];
       renderPeople();
       renderStartFrom();
-      status($('save-status'), 'Saved. Seerr applies it straight away; Jellyfin within a few minutes.', 'ok');
+      renderNewPeople();
+      status($('save-status'), 'Saved.Seerr applies it straight away; Jellyfin within a few minutes.', 'ok');
     } catch (err) {
       status($('save-status'), err.message, 'error');
     } finally {

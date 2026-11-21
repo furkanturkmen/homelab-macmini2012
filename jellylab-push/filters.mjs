@@ -381,6 +381,12 @@ export function validateContent(doc) {
     }
   }
   if (!Array.isArray(doc.adultTags)) return 'adultTags must be an array';
+  if ('newPeopleFrom' in doc && doc.newPeopleFrom !== null && typeof doc.newPeopleFrom !== 'string') {
+    return 'newPeopleFrom must be a Jellyfin user id or null';
+  }
+  if ('known' in doc && (!Array.isArray(doc.known) || doc.known.some(id => typeof id !== 'string'))) {
+    return 'known must be a list of Jellyfin user ids';
+  }
   return null;
 }
 
@@ -461,7 +467,10 @@ export function setPersonFilters(jellyfinUserId, changes) {
 /** Save a whole new store, in the same queue as a person's change. */
 function writeContent(change) {
   const run = contentWrites.then(async () => {
-    const doc = change(await loadContent());
+    const before = await loadContent();
+    const doc = change(before);
+    // Nothing changed: no write, so a once-a-minute check leaves the file alone.
+    if (doc === before) return doc;
     const problem = validateContent(doc);
     if (problem) throw Object.assign(new Error(problem), { status: 400 });
     await mkdir(dirname(CONTENT_STORE), { recursive: true });
@@ -472,6 +481,63 @@ function writeContent(change) {
   });
   contentWrites = run.catch(() => {});
   return run;
+}
+
+/*
+ * New accounts start filtered.
+ *
+ * An account made in Jellyfin used to see everything until someone opened the
+ * filter page and copied a filter onto it - easy to forget, and the person
+ * could already be browsing Seerr. `newPeopleFrom` names whose filter a new
+ * account gets; `known` is every account seen so far, so "new" means "not
+ * seen before", not "has no filter": someone whose filter was deliberately
+ * cleared is not filled in again. The first run only records who exists.
+ */
+
+/** Whose filter new accounts get, or null for none. */
+export function setNewPeopleFrom(id) {
+  const from = id ? String(id) : null;
+  return writeContent(doc => {
+    if (from && !doc.users[from]) throw Object.assign(new Error('that person has no filter to copy'), { status: 400 });
+    return { ...doc, newPeopleFrom: from };
+  });
+}
+
+/**
+ * The store after meeting `people` (Jellyfin accounts: { id, name, isAdmin }),
+ * and the names of those who were given a filter. Administrators are only
+ * recorded: they manage the filters rather than live under them.
+ */
+export function withNewPeople(doc, people) {
+  const ids = people.map(p => p.id);
+  if (!Array.isArray(doc.known)) return { doc: { ...doc, known: ids }, given: [], changed: true };
+  const known = new Set(doc.known);
+  const fresh = people.filter(p => !known.has(p.id));
+  const gone = doc.known.some(id => !ids.includes(id));
+  if (!fresh.length && !gone) return { doc, given: [], changed: false };
+  const from = doc.newPeopleFrom ? doc.users[doc.newPeopleFrom] : null;
+  let next = { ...doc, known: ids };
+  const given = [];
+  for (const p of fresh) {
+    if (p.isAdmin || !from || next.users[p.id]) continue;
+    next = withPersonChange(next, p.id, {
+      name: p.name, blockedTags: from.blockedTags, hideAdult: from.hideAdult, allowTitles: from.allowTitles ?? [],
+    });
+    given.push(p.name);
+  }
+  return { doc: next, given, changed: true };
+}
+
+/** Give accounts that appeared since the last look their starting filter. */
+export async function welcomeNewPeople(token) {
+  const people = await jellyfinPeople(token);
+  let given = [];
+  await writeContent(doc => {
+    const out = withNewPeople(doc, people);
+    given = out.given;
+    return out.doc;
+  });
+  return given;
 }
 
 /** Which keywords are broad: their word also blocks tags and keywords containing it. */

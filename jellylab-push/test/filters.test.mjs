@@ -118,6 +118,30 @@ test('withPersonChange keeps omitted fields and removes people left with nothing
   assert.deepEqual(added.users.new, { blockedTags: [7, 8], hideAdult: false, name: 'sam' });
 });
 
+test('new accounts get the starting filter; existing, admin and cleared accounts do not', () => {
+  const ana = { name: 'ana', blockedTags: [5, 6], hideAdult: true, allowTitles: [{ key: 'tv:1', name: 'One' }] };
+  const people = [{ id: 'ana', name: 'ana' }, { id: 'bo', name: 'bo' }];
+  // First look: only remembers who exists, even with a starting filter set.
+  const first = filters.withNewPeople({ version: 2, adultTags: [], users: { ana }, newPeopleFrom: 'ana' }, people);
+  assert.deepEqual(first.doc.known, ['ana', 'bo']);
+  assert.deepEqual(first.given, []);
+  assert.equal('bo' in first.doc.users, false);
+  // Same people again: the very same document back, so nothing is written.
+  assert.equal(filters.withNewPeople(first.doc, people).doc, first.doc);
+  // A new person and a new admin appear.
+  const later = filters.withNewPeople(first.doc, [...people, { id: 'cy', name: 'cy' }, { id: 'ad', name: 'ad', isAdmin: true }]);
+  assert.deepEqual(later.given, ['cy']);
+  assert.deepEqual(later.doc.users.cy, { ...ana, name: 'cy' });
+  assert.equal('ad' in later.doc.users, false);
+  assert.equal('bo' in later.doc.users, false, 'someone already known and unfiltered stays so');
+  // No starting filter chosen: new people are only remembered.
+  const none = filters.withNewPeople({ ...first.doc, newPeopleFrom: null }, [...people, { id: 'dee', name: 'dee' }]);
+  assert.deepEqual(none.given, []);
+  assert.ok(none.doc.known.includes('dee'));
+  // Deleted accounts are forgotten.
+  assert.deepEqual(filters.withNewPeople(first.doc, [people[0]]).doc.known, ['ana']);
+});
+
 test('validateContent rejects shapes the guard would not parse', () => {
   assert.equal(filters.validateContent({ version: 2, adultTags: [], users: {} }), null);
   assert.match(filters.validateContent({ version: 1, adultTags: [], users: {} }), /version/);

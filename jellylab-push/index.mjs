@@ -1421,6 +1421,20 @@ const server = createServer(async (req, res) => {
     }
   }
 
+  /* Whose filter a new account gets ({ from: jellyfin id | null }). */
+  if (url.pathname === '/filters/new-people' && req.method === 'PUT') {
+    try {
+      if (!fromHomeNetwork(req)) throw Object.assign(new Error('home network only'), { status: 403 });
+      await filters.requireAdmin(req.headers['x-emby-token']);
+      const { from } = JSON.parse((await readText(req)) || '{}');
+      const doc = await filters.setNewPeopleFrom(from);
+      log(`filter store: new accounts start ${doc.newPeopleFrom ? `like ${doc.users[doc.newPeopleFrom]?.name ?? doc.newPeopleFrom}` : 'unfiltered'}`);
+      return send(res, 200, { newPeopleFrom: doc.newPeopleFrom });
+    } catch (err) {
+      return send(res, err.status ?? (err instanceof SyntaxError ? 400 : 500), { error: err.message });
+    }
+  }
+
   const personMatch = /^\/filters\/content\/([^/]+)$/.exec(url.pathname);
   if (personMatch && req.method === 'PUT') {
     const secret = req.headers['x-filter-store-secret'];
@@ -1758,6 +1772,21 @@ if (JELLYFIN_API_KEY) {
   // up alongside this, and a sync that cannot read them just logs a failure.
   setTimeout(filterSyncTick, 20000).unref();
   log(`filter sync every ${Math.round(FILTER_SYNC_MS / 60000)} min`);
+
+  // New accounts get their starting filter within a minute of being made,
+  // before they are likely to have signed in anywhere.
+  const newPeopleTick = async () => {
+    try {
+      const given = await filters.welcomeNewPeople(JELLYFIN_API_KEY);
+      if (!given.length) return;
+      log(`filter store: new account(s) given the starting filter: ${given.join(', ')}`);
+      await runFilterSync(JELLYFIN_API_KEY, 'new account', false);
+    } catch (err) {
+      log(`new account check failed: ${err.message}`);
+    }
+  };
+  setInterval(newPeopleTick, 60 * 1000).unref();
+  setTimeout(newPeopleTick, 15000).unref();
 } else {
   log('filter sync idle: no JELLYFIN_API_KEY');
 }
