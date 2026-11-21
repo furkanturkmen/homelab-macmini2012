@@ -365,7 +365,12 @@ def main():
                     sys.__stdout__.flush()
                     log.flush()
             sys.stdout = Both()
-            return 0 if finish(args.finish) else 1
+            try:
+                return 0 if finish(args.finish) else 1
+            finally:
+                # Python flushes stdout once more at exit; with the log
+                # closed by then, that failed and every swap answered "error".
+                sys.stdout = sys.__stdout__
     if args.release:
         c = load_json(CLAIMS).get(args.release)
         if c and os.path.exists(temp_for(c['path'])):
