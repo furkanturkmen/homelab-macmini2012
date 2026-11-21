@@ -180,6 +180,8 @@ test('sexualFrom reads AniList and MyAnimeList the agreed way', () => {
   assert.deepEqual(filters.sexualFrom({ malRating: 'r+' }), ['MyAnimeList: R+ (mild nudity)']);
   assert.deepEqual(filters.sexualFrom({ malRating: 'rx' }), ['MyAnimeList: Rx (hentai)']);
   assert.deepEqual(filters.sexualFrom({ malRating: 'r' }), []);
+  assert.deepEqual(filters.sexualFrom({ anilist: { genres: [], tags: [{ name: 'Masturbation', rank: 25 }] } }), ['AniList: Masturbation 25%']);
+  assert.deepEqual(filters.sexualFrom({ anilist: { genres: [], tags: [{ name: 'Nudity', rank: 36 }] } }), [], 'nudity below 50% alone is not enough');
   assert.deepEqual(filters.sexualFrom({ malRating: 'pg_13' }), []);
   // AniList tags the household chose: rape, incest, prostitution at any strength, nudity from 50%.
   const tagged = (tags) => filters.sexualFrom({ anilist: { genres: [], tags } });
@@ -189,7 +191,7 @@ test('sexualFrom reads AniList and MyAnimeList the agreed way', () => {
   assert.deepEqual(tagged([{ name: 'Nudity', rank: 56 }]), ['AniList: Nudity 56%']);
   assert.deepEqual(tagged([{ name: 'Nudity', rank: 50 }]), ['AniList: Nudity 50%'], '50% itself counts');
   assert.deepEqual(tagged([{ name: 'Nudity', rank: 48 }]), [], 'below 50% nudity does not');
-  assert.deepEqual(tagged([{ name: 'Masturbation', rank: 25 }]), [], 'not a chosen tag');
+  assert.deepEqual(tagged([{ name: 'Masturbation', rank: 25 }]), ['AniList: Masturbation 25%'], 'masturbation at any strength (since 2026-11-21)');
   assert.deepEqual(filters.sexualFrom({ anilist: { genres: ['Action'] }, malRating: 'PG-13' }), []);
 });
 

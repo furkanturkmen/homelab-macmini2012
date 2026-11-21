@@ -697,14 +697,20 @@ async function malRating(idMal, down) {
  * AniList tags that count, from what strength (the share of AniList voters who
  * agree the tag applies). Decided by the household on 2026-11-16: rape, incest
  * and prostitution at any strength, nudity from 50% - below that it is on half
- * the mainstream action anime there are.
+ * the mainstream action anime there are. Masturbation at any strength added
+ * 2026-11-21: Devils' Line (sex scenes, nudity 36%, MyAnimeList "R") got
+ * through; in the library it caught nothing else.
  */
 export const SEXUAL_TAGS = [
   { name: 'Rape', from: 0 },
   { name: 'Incest', from: 0 },
   { name: 'Prostitution', from: 0 },
+  { name: 'Masturbation', from: 0 },
   { name: 'Nudity', from: 50 },
 ];
+// Which tags a saved AniList answer was kept for. Only these tags are saved,
+// so an answer saved before a tag was added must be asked again.
+const TAG_RULES = SEXUAL_TAGS.map(r => r.name).join(',');
 
 /** Whether a source's answer means sexual content. */
 export function sexualFrom({ anilist, malRating }) {
@@ -752,8 +758,9 @@ function oneAtATime(fn) {
   sexualQueue = run.catch(() => {});
   return run;
 }
-// An AniList entry saved before tags were kept is asked again.
-const freshAniList = (entry) => fresh(entry) && Array.isArray(entry.tags);
+// An AniList entry saved before tags were kept, or before the tag list last
+// changed, is asked again.
+const freshAniList = (entry) => fresh(entry) && Array.isArray(entry.tags) && entry.rules === TAG_RULES;
 
 const ANIME_KEYWORD = 210024;
 const plain = (s) => String(s ?? '').toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, '');
@@ -841,7 +848,7 @@ async function sexualVerdictsNow(anilistIds) {
       if (!res.ok) throw new Error(`anilist answered ${res.status}`);
       for (const m of (await res.json())?.data?.Page?.media ?? []) {
         const tags = (m.tags ?? []).filter(t => SEXUAL_TAGS.some(r => r.name === t.name)).map(t => ({ name: t.name, rank: t.rank }));
-        cache.anilist[m.id] = { isAdult: m.isAdult === true, genres: m.genres ?? [], idMal: m.idMal ?? null, tags, at: Date.now() };
+        cache.anilist[m.id] = { isAdult: m.isAdult === true, genres: m.genres ?? [], idMal: m.idMal ?? null, tags, rules: TAG_RULES, at: Date.now() };
       }
     } catch {
       break; // keep what is known; the rest is asked next run
