@@ -311,6 +311,18 @@ which you get, so jellylab-push (`anime-subs.mjs`) learns it from files:
 
 The list and counts are in `jellylab-push-data/anime-subs.json`.
 
+## R16 — Subtitles only in a language nobody here reads
+
+A release that says it is subtitled in one other language ("Finnish sub",
+"German Subbed") and mentions neither English nor multi-subs has no English
+subtitles. It still matched every rule above and was grabbed: a Finnish-subbed
+episode of an anime came in on 2026-11-24.
+
+Custom format **Foreign subs only** (one title condition) scores **-10000**, so
+it is refused like a hardsub (R12). A title that also names English or
+multi-subs is not touched. Dutch and Turkish are left out on purpose: the
+household reads those.
+
 ## How to find out which rule is costing you
 
 Do not reason about it from the config — measure. Run interactive searches on

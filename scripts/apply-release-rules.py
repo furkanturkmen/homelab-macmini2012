@@ -27,6 +27,11 @@ RECYCLE_BIN = os.environ.get('RECYCLE_BIN', '/media/.recyclebin')
 # Anime exists almost only in those codecs now; 0 made whole titles
 # unobtainable. The same value must be set in BOTH apps (R7).
 MIN_FORMAT_SCORE = int(os.environ.get('MIN_FORMAT_SCORE', '-25'))
+FOREIGN_SUBS_ONLY = (
+    r'^(?!.*\b(?:eng(?:lish)?|multi[- ]?subs?|multisubs?|multiple subtitles?)\b)'
+    r'.*\b(?:finnish|swedish|norwegian|danish|polish|czech|hungarian|greek|hebrew|indonesian|malay'
+    r'|vietnamese|thai|russian|ukrainian|arabic|spanish|portuguese|brazilian|german|italian|korean|chinese)'
+    r'[ -]?sub(?:s|bed|titles?)?\b')
 ENV = os.path.join(os.path.expanduser(os.environ.get('HOMELAB_DIR', '~/homelab')), '.env')
 
 # R8 and R9 used to live here - which qualities each profile allows, and the
@@ -295,10 +300,14 @@ def main():
                           r'\bVOSTFR\b|\bVOSTA\b|\bHARDSUB')
             ensure_format(a, 'French hardsub group',
                           group_regex=r'Tsundere-Raws|Punisher694')
+            # R16: subtitled only in a language nobody here reads. Not when the
+            # title also names English or multi-subs; Dutch and Turkish are read.
+            ensure_format(a, 'Foreign subs only', FOREIGN_SUBS_ONLY)
             ensure_profiles(a, {'Repack/Proper': 5, 'Italian release': -1000,
                                 'HEVC (x265)': -20, 'AV1': -25,
                                 'French hardsub (VOSTFR)': -10000,
-                                'French hardsub group': -10000})
+                                'French hardsub group': -10000,
+                                'Foreign subs only': -10000})
             # Container path, and it must sit on the same filesystem as the
             # library or every delete becomes a slow copy. Dot-prefixed so
             # Jellyfin does not index it as a library.
