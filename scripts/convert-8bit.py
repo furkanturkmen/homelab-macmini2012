@@ -86,20 +86,45 @@ def run(*args, timeout=120):
 
 
 def probe(path):
-    """{'streams': [(type, codec, pix_fmt)], 'duration': seconds} or None."""
+    """{'streams': [(type, codec, pix_fmt, transfer)], 'duration': seconds} or None."""
     r = run('docker', 'exec', 'jellyfin', f'{FF}/ffprobe', '-v', 'fatal', '-show_entries',
-            'stream=codec_type,codec_name,pix_fmt:format=duration', '-of', 'json',
+            'stream=codec_type,codec_name,pix_fmt,color_transfer:format=duration', '-of', 'json',
             path.replace(MEDIA, IN_CONTAINER, 1))
     if r.returncode:
         return None
     d = json.loads(r.stdout or '{}')
-    return {'streams': [(s.get('codec_type'), s.get('codec_name'), s.get('pix_fmt'))
+    return {'streams': [(s.get('codec_type'), s.get('codec_name'), s.get('pix_fmt'), s.get('color_transfer'))
                         for s in d.get('streams', [])],
             'duration': float(d.get('format', {}).get('duration') or 0)}
 
 
 def ten_bit(info):
-    return any(t == 'video' and '10' in (p or '') for t, _, p in info['streams'])
+    return any(s[0] == 'video' and '10' in (s[2] or '') for s in info['streams'])
+
+
+# HDR (PQ or HLG) squeezed to 8 bits as it is comes out grey and washed out:
+# its brightness is written on a different curve. Such a file is turned into
+# ordinary picture (SDR, BT.709) on the way.
+HDR_TRANSFERS = {'smpte2084', 'arib-std-b67'}
+TONEMAP = ('zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,'
+           'tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p')
+
+
+def hdr(info):
+    return any(s[0] == 'video' and len(s) > 3 and s[3] in HDR_TRANSFERS for s in info['streams'])
+
+
+def encode_args(info):
+    """ffmpeg's settings between input and output, for this box and a helper
+    alike, so a file looks the same whichever computer converted it. :V is
+    video that is not a cover picture: a release with cover art carries it as
+    a second video track, and encoding that too failed on its odd height."""
+    args = ['-map', '0', '-c', 'copy', '-c:V', 'libx264', '-preset', 'veryfast', '-crf', '19',
+            '-tune', 'animation', '-pix_fmt:V', 'yuv420p', '-profile:V', 'high']
+    if hdr(info):
+        args += ['-filter:V', TONEMAP, '-color_primaries:V', 'bt709', '-color_trc:V', 'bt709',
+                 '-colorspace:V', 'bt709']
+    return args
 
 
 def sessions():
@@ -204,7 +229,10 @@ def take_next(by, dry_run=False):
                     now = stamp(src)
                 except FileNotFoundError:  # deleted since the folder was listed
                     continue
-                if (probes.get(src) or [None])[0] != now:
+                cached = probes.get(src) or [None, None]
+                # Probed before the colour curve was read: ask again.
+                stale = cached[1] and any(len(s) < 4 for s in cached[1]['streams'])
+                if cached[0] != now or stale:
                     probes[src] = [now, probe(src)]
                 info = probes[src][1]
                 if not info or not ten_bit(info) or failed.get(src) == now or src in taken:
@@ -239,23 +267,20 @@ def release(fid):
 def kinds(info):
     """Track types and how many of each. The order may differ after a remux:
     Matroska writes a cover picture before the font attachments."""
-    return sorted(t for t, _, _ in info['streams'])
+    return sorted(s[0] for s in info['streams'])
 
 
-def encode_here(src):
+def encode_here(src, info):
     """Encode src next to itself on this box. Returns the encoder's last errors."""
     d, name = os.path.split(src)
     tmp_name = os.path.basename(temp_for(src))
     image = run('docker', 'inspect', 'jellyfin', '-f', '{{.Config.Image}}').stdout.strip()
     st = os.stat(src)
     run('docker', 'rm', '-f', WORKER)
-    # :V is video that is not a cover picture. A release with cover art carries
-    # it as a second video track; encoding that too failed on its odd height.
     run('docker', 'run', '-d', '--name', WORKER, '--cpu-shares', '256',
         '--user', f'{st.st_uid}:{st.st_gid}', '-v', f'{d}:/work', '--entrypoint', f'{FF}/ffmpeg',
         image, '-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', f'/work/{name}',
-        '-map', '0', '-c', 'copy', '-c:V', 'libx264', '-preset', 'veryfast', '-crf', '19',
-        '-tune', 'animation', '-pix_fmt:V', 'yuv420p', '-profile:V', 'high', f'/work/{tmp_name}')
+        *encode_args(info), f'/work/{tmp_name}')
     paused = False
     while run('docker', 'ps', '-q', '-f', f'name=^{WORKER}$').stdout.strip():
         busy = transcoding()
@@ -342,7 +367,8 @@ def main():
         name = re.sub(r'[^\w.-]', '', args.claim)
         pick = take_next(name if name and name != 'box' else 'helper')
         if pick:
-            print(json.dumps({'id': file_id(pick[0]), 'name': os.path.basename(pick[0])}))
+            print(json.dumps({'id': file_id(pick[0]), 'name': os.path.basename(pick[0]),
+                              'args': encode_args(pick[1])}))
         return
     if args.send:
         with open(claim(args.send)['path'], 'rb') as f:
@@ -397,7 +423,7 @@ def main():
         pick = take_next('box')
         if not pick:
             return
-        finish(file_id(pick[0]), encode_here(pick[0]))
+        finish(file_id(pick[0]), encode_here(*pick))
 
 
 if __name__ == '__main__':

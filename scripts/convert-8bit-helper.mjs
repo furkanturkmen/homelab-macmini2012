@@ -118,7 +118,7 @@ for (;;) {
     log(`nothing left to convert (${done} done here)`);
     break;
   }
-  const { id, name } = JSON.parse(c.out);
+  const { id, name, args } = JSON.parse(c.out);
   current = id;
 
   log(`fetching  ${name}`);
@@ -131,13 +131,12 @@ for (;;) {
     continue;
   }
 
-  // The same settings as convert-8bit.py, so a file looks the same whichever
-  // computer converted it. :V is video that is not a cover picture.
+  // The server chooses the settings (convert-8bit.py encode_args), so a file
+  // looks the same whichever computer converted it.
   log(`encoding  ${name} (${mb(input)} MB)`);
   const started = Date.now();
   const enc = await run(FFMPEG, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', input,
-    '-map', '0', '-c', 'copy', '-c:V', 'libx264', '-preset', 'veryfast', '-crf', '19',
-    '-tune', 'animation', '-pix_fmt:V', 'yuv420p', '-profile:V', 'high', output],
+    ...args, output],
   { priority: os.constants.priority.PRIORITY_LOW });
 
   if (enc.code) {
